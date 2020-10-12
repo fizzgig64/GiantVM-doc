@@ -1,9 +1,9 @@
 
-本文主要分析 [https://lkml.org/lkml/2017/12/8/116](https://lkml.org/lkml/2017/12/8/116) 中 pvtimer 的实现。
+This article mainly analyzes the implementation of pvtimer in [https://lkml.org/lkml/2017/12/8/116](https://lkml.org/lkml/2017/12/8/116).
 
-## 原始实现
+## Original implementation
 
-Linux kernel 中会通过 lapic_next_deadline 设置定时器，即设置下一个超时的时间点。原来的设置很简单：
+Linux kernel will set the timer through lapic_next_deadline, that is, set the next timeout point. The original setting is simple:
 
 ```c
 static int lapic_next_deadline(unsigned long delta,
@@ -11,18 +11,18 @@ static int lapic_next_deadline(unsigned long delta,
 {
     u64 tsc;
 
-    tsc = rdtsc();
+    tsc = rdtsc ();
     wrmsrl(MSR_IA32_TSC_DEADLINE, tsc + (((u64) delta) * TSC_DIVISOR));
     return 0;
 }
 ```
 
-就是读取当前的 TSC ，加上要等待的时间 delta ，写入到 MSR_IA32_TSC_DEADLINE 中。
+It is to read the current TSC, add the waiting time delta, and write it into MSR_IA32_TSC_DEADLINE.
 
 > TSC-Deadline Mode
-> APIC Timer 的三种操作模式之一，为其写入一个非零64位值即可激活 Timer ，使得在 TSC 达到该值时触发一个中断。该中断只会触发一次，触发后 IA32_TSC_DEADLINE_MSR 就被重置为零。
+> One of the three operation modes of APIC Timer. Write a non-zero 64-bit value to it to activate the Timer, so that an interrupt is triggered when the TSC reaches this value. This interrupt will only be triggered once, and IA32_TSC_DEADLINE_MSR will be reset to zero after being triggered.
 
-如果 Linux 是跑在 KVM 之上的 Guest ，则触发 VMExit ，退回到 KVM ，执行 `kvm_set_lapic_tscdeadline_msr(vcpu, data)`
+If Linux is a guest running on KVM, VMExit is triggered, returns to KVM, and executes `kvm_set_lapic_tscdeadline_msr(vcpu, data)`
 
 ```c
 void kvm_set_lapic_tscdeadline_msr(struct kvm_vcpu *vcpu, u64 data)
@@ -33,22 +33,22 @@ void kvm_set_lapic_tscdeadline_msr(struct kvm_vcpu *vcpu, u64 data)
             apic_lvtt_period(apic))
         return;
 
-    hrtimer_cancel(&apic->lapic_timer.timer);
+    hrtimer_cancel (& apic-> lapic_timer.timer);
     apic->lapic_timer.tscdeadline = data;
     start_apic_timer(apic);
 }
 ```
 
-于是 KVM 就会取消当前 apic->lapic_timer.timer 上的定时，重新设置新的超时时间。注意，vCPU 设置的 timer 会被加入到物理 CPU 的 timer 红黑树中。
+Then KVM will cancel the current timing on apic->lapic_timer.timer and reset the new timeout time. Note that the timer set by the vCPU will be added to the timer red-black tree of the physical CPU.
 
 
-apic->lapic_timer.timer 的回调函数在 kvm_create_lapic 设置为 apic_timer_fn ：
+The callback function of apic->lapic_timer.timer is set to apic_timer_fn in kvm_create_lapic:
 
 
 ```c
 static enum hrtimer_restart apic_timer_fn(struct hrtimer *data)
 {
-    struct kvm_timer *ktimer = container_of(data, struct kvm_timer, timer);
+    struct kvm_timer * ktimer = container_of (data, struct kvm_timer, timer);
     struct kvm_lapic *apic = container_of(ktimer, struct kvm_lapic, lapic_timer);
 
     apic_timer_expired(apic);
@@ -64,13 +64,13 @@ static enum hrtimer_restart apic_timer_fn(struct hrtimer *data)
 
 ### Guest
 
-每个 CPU 都维护有 pvtimer_vcpu_event_info 类型的 per-CPU 变量 pvtimer_shared_buf 。在 kvm_guest_cpu_init 时，会将其的地址填入 MSR_KVM_PV_TIMER_EN 中，供 KVM 填充:
+Each CPU maintains a per-CPU variable pvtimer_shared_buf of type pvtimer_vcpu_event_info. In kvm_guest_cpu_init, its address will be filled in MSR_KVM_PV_TIMER_EN for KVM to fill:
 
 ```c
-#define MSR_KVM_PV_TIMER_EN     0x4b564d05
+#define MSR_KVM_PV_TIMER_EN 0x4b564d05
 ```
 
-存放 pvtimer_vcpu_event_info 的地址：
+The address where pvtimer_vcpu_event_info is stored:
 
 ```c
 struct pvtimer_vcpu_event_info {
@@ -79,7 +79,7 @@ struct pvtimer_vcpu_event_info {
 } __attribute__((__packed__));
 ```
 
-上文提过，原本 Linux kernel 在 lapic_next_deadline 把下一个超时的时间点写到 MSR_IA32_TSC_DEADLINE 中，会发生 VMExit 。而该 patch 的本质思想就是将其写到 pvtimer_vcpu_event_info 中，这样就避免了 VMExit 。
+As mentioned above, the original Linux kernel writes the next timeout point in lapic_next_deadline to MSR_IA32_TSC_DEADLINE, VMExit will occur. The essential idea of ​​the patch is to write it in pvtimer_vcpu_event_info, thus avoiding VMExit.
 
 ```c
 static int lapic_next_deadline(unsigned long delta,
@@ -109,13 +109,13 @@ int kvm_pv_timer_next_event(unsigned long tsc,
     if (!this_cpu_read(pvtimer_enabled))
         return false;
 
-    /* 将当前设置的超时时间写到 pvtimer_vcpu_event_info.expire_tsc 中
-     * 取出上次设置的 expire_tsc ，如果它：
-     *  1. 小于 pvtimer 下一次的 pv_sync_timer 超时的时间（pvtimer_vcpu_event_info.next_sync_tsc）
-     *      表示在 KVM 主动去检查是否有 timer 超时之前，该 timer 已经超时，所以需要将该超时时间通过传统方式，
-     *      即设置 MSR_IA32_TSC_DEADLINE 来让 KVM 立刻调用 kvm_apic_sync_pv_timer
-     *  2. 小于当前时间，表示已经超时，需要尽快触发中断，只能通过传统方式设置，让 KVM 立刻调用 kvm_apic_sync_pv_timer
-     *  3. 其他情况表示还未超时，无需进行处理
+    /* Write the currently set timeout time to pvtimer_vcpu_event_info.expire_tsc
+     * Take out the expire_tsc set last time, if it:
+     * 1. Less than pvtimer's next pv_sync_timer timeout time (pvtimer_vcpu_event_info.next_sync_tsc)
+     * Indicates that the timer has timed out before KVM actively checks whether there is a timer timeout, so the timeout period needs to be passed through traditional methods.
+     * Set MSR_IA32_TSC_DEADLINE to let KVM call kvm_apic_sync_pv_timer immediately
+     * 2. If it is less than the current time, it means that it has timed out and the interrupt needs to be triggered as soon as possible. It can only be set in the traditional way and let KVM call kvm_apic_sync_pv_timer immediately
+     * 3. In other cases, it has not timed out and no processing is required
      */
     src = this_cpu_ptr(&pvtimer_shared_buf);
     xchg((u64 *)&src->expire_tsc, tsc);
@@ -138,9 +138,9 @@ int kvm_pv_timer_next_event(unsigned long tsc,
 
 ### KVM
 
-#### cache 初始化
+#### Cache initialization
 
-当 Guest 设置 MSR_KVM_PV_TIMER_EN 时，会 VMExit 到 KVM ，调用 kvm_lapic_enable_pv_timer 进行初始化 vcpu->arch.pv_timer 结构。
+When the guest sets MSR_KVM_PV_TIMER_EN, it will VMExit to KVM and call kvm_lapic_enable_pv_timer to initialize the vcpu->arch.pv_timer structure.
 
 ```c
 struct {
@@ -159,13 +159,13 @@ int kvm_lapic_enable_pv_timer(struct kvm_vcpu *vcpu, u64 data)
     if (!IS_ALIGNED(addr, 4))
         return 1;
 
-     // 保存 pvtimer_vcpu_event_info 的地址
+     // Save the address of pvtimer_vcpu_event_info
     vcpu->arch.pv_timer.msr_val = data;
     if (!pv_timer_enabled(vcpu))
         return 0;
 
-    // 建立 GPA 到 HVA 的 cache
-    ret = kvm_gfn_to_hva_cache_init(vcpu->kvm, &vcpu->arch.pv_timer.data,
+    // Establish GPA to HVA cache
+    ret = kvm_gfn_to_hva_cache_init (vcpu-> kvm, & vcpu-> arch.pv_timer.data,
                     addr, sizeof(struct pvtimer_vcpu_event_info));
 
     return ret;
@@ -176,9 +176,9 @@ int kvm_lapic_enable_pv_timer(struct kvm_vcpu *vcpu, u64 data)
 
 
 
-#### pvtimer 初始化
+#### pvtimer initialization
 
-在 kvm_lapic_init 时，通过 kvm_pv_timer_init 初始化 pvtimer ：
+In kvm_lapic_init, initialize pvtimer through kvm_pv_timer_init:
 
 ```c
 #define PVTIMER_SYNC_CPU   (NR_CPUS - 1) /* dedicated CPU */
@@ -211,36 +211,36 @@ static void kvm_pv_timer_init(void)
 }
 ```
 
-创建了高精度定时器 pv_sync_timer ，使用 monotonic （单调）时间，在 pv_timer_period_ns （默认为 250000 ns）后调用一次 pv_sync_timer_callback
+Created a high-precision timer pv_sync_timer, using monotonic (monotonic) time, calling pv_sync_timer_callback once after pv_timer_period_ns (default is 250000 ns)
 
 ```c
 static enum hrtimer_restart pv_sync_timer_callback(struct hrtimer *timer)
 {
-    // 将 timer 的超时时间推后 pv_timer_period_ns
+    // Push the timer's timeout time back pv_timer_period_ns
     hrtimer_forward_now(timer, ns_to_ktime(pv_timer_period_ns));
-    // 唤醒 pv_timer_polling_worker
+    // wake up pv_timer_polling_worker
     wake_up_process(pv_timer_polling_worker);
 
-    // 返回 restart 表示 timer 会重新被激活
+    // Return to restart to indicate that the timer will be activated again
     return HRTIMER_RESTART;
 }
 ```
 
-kvm_pv_timer_init 同时创建了名为 pv_timer_polling_worker/x 的内核进程，其中 x 为最后一个 CPU 的编号，表示它将在该 CPU 上执行（kthread_bind）。该线程执行 pv_timer_polling 。
+kvm_pv_timer_init also creates a kernel process named pv_timer_polling_worker/x, where x is the number of the last CPU, which means it will be executed on that CPU (kthread_bind). This thread executes pv_timer_polling.
 
-配合 pv_sync_timer，相当于每隔 pv_timer_period_ns 唤醒一次 pv_timer_polling_worker ，执行 pv_timer_polling。
+With pv_sync_timer, it is equivalent to waking up pv_timer_polling_worker every pv_timer_period_ns and executing pv_timer_polling.
 
 
 ```c
 static int pv_timer_polling(void *arg)
 {
-    struct kvm *kvm;
+    struct sqm * sqm;
     struct kvm_vcpu *vcpu;
     int i;
     mm_segment_t oldfs = get_fs();
 
     while (1) {
-        // 设置为处于可中断睡眠状态
+        // Set to be in interruptible sleep state
         set_current_state(TASK_INTERRUPTIBLE);
 
         if (kthread_should_stop()) {
@@ -249,7 +249,7 @@ static int pv_timer_polling(void *arg)
         }
 
         spin_lock(&kvm_lock);
-        // 设置处于可运行状态，此时如果被调度器选中会立刻运行
+        // The setting is in a runnable state, if selected by the scheduler, it will run immediately
         __set_current_state(TASK_RUNNING);
         list_for_each_entry(kvm, &vm_list, vm_list) {
             set_fs(USER_DS);
@@ -263,7 +263,7 @@ static int pv_timer_polling(void *arg)
 
         spin_unlock(&kvm_lock);
 
-        // 主动让出控制权给下一个进程
+        // Take the initiative to give up control to the next process
         schedule();
     }
 
@@ -271,7 +271,7 @@ static int pv_timer_polling(void *arg)
 }
 ```
 
-该函数会遍历所有 VM ，对其中的每个 vCPU 调用 kvm_apic_sync_pv_timer 。调用完成后，pv_timer_polling 通过 schedule 将控制权让给下一个进程，等待 pv_sync_timer 的下一次超时唤醒。
+This function traverses all VMs and calls kvm_apic_sync_pv_timer on each vCPU. After the call is completed, pv_timer_polling transfers control to the next process through schedule, and waits for the next timeout of pv_sync_timer to wake up.
 
 ```c
 void kvm_apic_sync_pv_timer(void *data)
@@ -286,9 +286,9 @@ void kvm_apic_sync_pv_timer(void *data)
         return;
 
     local_irq_save(flags);
-    // 获取 Guest 当前的实际 TSC 值
+    // Get the current actual TSC value of Guest
     guest_tsc = kvm_read_l1_tsc(vcpu, rdtsc());
-    // 计算 pv_sync_timer 器还有多少 TSC 超时
+    // Calculate how many TSC timeouts the pv_sync_timer has
     rem_tsc = ktime_to_ns(hrtimer_get_remaining(&pv_sync_timer))
             * this_tsc_khz;
     if (rem_tsc <= 0)
@@ -299,27 +299,27 @@ void kvm_apic_sync_pv_timer(void *data)
      * make sure guest_tsc and rem_tsc are assigned before to update
      * next_sync_tsc.
      */
-    smp_wmb();
-    // 将下一次 pv_sync_timer 超时的 TSC 写入到 pvtimer_vcpu_event_info.next_sync_tsc
+    smp_wmb ();
+    // Write the TSC of the next pv_sync_timer timeout to pvtimer_vcpu_event_info.next_sync_tsc
     kvm_xchg_guest_cached(vcpu->kvm, &vcpu->arch.pv_timer.data,
         offsetof(struct pvtimer_vcpu_event_info, next_sync_tsc),
         guest_tsc + rem_tsc, 8);
 
     /* make sure next_sync_tsc is visible */
-    smp_wmb();
+    smp_wmb ();
 
-    // 读取 pvtimer_vcpu_event_info.expire_tsc 并将其设置为 0
-    // 此时 expire_tsc 存放的是 Guest （先前设置的）下一次超时时间点
+    // Read pvtimer_vcpu_event_info.expire_tsc and set it to 0
+    // At this time expire_tsc stores the next timeout point of the Guest (previously set)
     expire_tsc = kvm_xchg_guest_cached(vcpu->kvm, &vcpu->arch.pv_timer.data,
             offsetof(struct pvtimer_vcpu_event_info, expire_tsc),
             0UL, 8);
 
     /* make sure expire_tsc is visible */
-    smp_wmb();
+    smp_wmb ();
 
-    // 如果当前 Guest timer 未超时，则把 expire_tsc 设置到 apic->lapic_timer.tscdeadline ，设置 timer
-    //   等效于 Guest 写入 MSR_IA32_TSCDEADLINE 发现 VMExit 后 KVM 进行的操作
-    // 如果已经超时，直接注入 APIC_LVTT 中断
+    // If the current Guest timer has not expired, set expire_tsc to apic->lapic_timer.tscdeadline and set the timer
+    // Equivalent to the operation performed by KVM after Guest writes MSR_IA32_TSCDEADLINE and finds VMExit
+    // If it has timed out, directly inject APIC_LVTT interrupt
     if (expire_tsc) {
         if (expire_tsc > guest_tsc)
             /*
@@ -336,7 +336,7 @@ void kvm_apic_sync_pv_timer(void *data)
 }
 ```
 
-另外还修改了写 MSR_IA32_TSCDEADLINE 时的处理，由原来的直接 `kvm_set_lapic_tscdeadline_msr(vcpu, data);` 改为
+In addition, the processing when writing MSR_IA32_TSCDEADLINE is modified, from the original direct `kvm_set_lapic_tscdeadline_msr(vcpu, data);` to
 
 ```c
 if (pv_timer_enabled(vcpu))
@@ -346,13 +346,13 @@ else
     kvm_set_lapic_tscdeadline_msr(vcpu, data);
 ```
 
-当然，如果在 kvm_apic_sync_pv_timer 中发现 Guest 设置的 timer 超时了，还是会调用 kvm_set_lapic_tscdeadline_msr 去设置 apic->lapic_timer.timer。
+Of course, if you find that the timer set by Guest has timed out in kvm_apic_sync_pv_timer, you still call kvm_set_lapic_tscdeadline_msr to set apic->lapic_timer.timer.
 
-apic->lapic_timer.timer 超时时，会发送 APIC_LVTT 的中断，如果 timer 处于 TSC deadline mode ，按照规范需要将 deadline 设置为 0
+apic->lapic_timer. When timer expires, APIC_LVTT interrupt will be sent. If timer is in TSC deadline mode, set deadline to 0 as required by the specification
 
 ```c
 static enum hrtimer_restart apic_timer_fn(struct hrtimer *data) {
-    struct kvm_timer *ktimer = container_of(data, struct kvm_timer, timer);
+    struct kvm_timer * ktimer = container_of (data, struct kvm_timer, timer);
     struct kvm_lapic *apic = container_of(ktimer, struct kvm_lapic, lapic_timer);
 
     if (pv_timer_enabled(apic->vcpu)) {
@@ -365,13 +365,10 @@ static enum hrtimer_restart apic_timer_fn(struct hrtimer *data) {
 ```
 
 
-## 总结
+## to sum up
 
-原来设置 APIC timer 的方式：Guest 将超时的时间戳（tsc-deadline timestamp）写入到 MSR_IA32_TSC_DEADLINE ，触发 VMExit 。KVM 会设置在物理CPU上设置 timer 。
+The original way to set the APIC timer: Guest writes the time-out timestamp (tsc-deadline timestamp) to MSR_IA32_TSC_DEADLINE to trigger VMExit. KVM will set the timer on the physical CPU.
 
-pvtimer 将本来要设置到 MSR_IA32_TSCDEADLINE 里面的超时时间戳设置到 pvtimer_vcpu_event_info （的 expire_tsc）中。
+pvtimer sets the timeout timestamp that was originally set to MSR_IA32_TSCDEADLINE to pvtimer_vcpu_event_info (expire_tsc).
 
-KVM 创建一个线程，定时检查 pvtimer_vcpu_event_info.expire_tsc ，发现超时了就直接注入超时中断，还没超时就调用 kvm_set_lapic_tscdeadline_msr 。原来是设置了 MSR 后发生 VMExit ，KVM 中对应的 handler 去调用，现在变成了定时检查，如被设置了，则调用。减少了 VMExit 。
-
-
-
+KVM creates a thread, checks pvtimer_vcpu_event_info.expire_tsc regularly, and directly injects a timeout interrupt when it is timed out, and calls kvm_set_lapic_tscdeadline_msr before it times out. It turned out that VMExit occurred after the MSR was set, and the corresponding handler in KVM was called. Now it becomes a regular check. If it is set, it is called. Reduced VMExit.
