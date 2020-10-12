@@ -1,109 +1,109 @@
 # IOAPIC
-IOAPIC全称为82093AA I/O Advanced Programmable Interrupt Controller，据此型号可找到其[手册](https://pdos.csail.mit.edu/6.828/2016/readings/ia32/ioapic.pdf)。
+IOAPIC is called 82093AA I/O Advanced Programmable Interrupt Controller. According to this model, you can find its [Manual](https://pdos.csail.mit.edu/6.828/2016/readings/ia32/ioapic.pdf).
 
-IOAPIC通过MMIO访问，实际只有两个32位的寄存器可供访问，分别是I/O Register Select（IOREGSEL，只有低8位有效）和I/O Window（IOWIN），其物理地址分别为0xFEC0xy00和0xFEC0xy10（其中x、y可通过APIC Base Address Relocation Register配置）。前者提供Index，其第0-7位表示要访问的寄存器编号，后者提供Data，用于读写要访问的IOAPIC寄存器。
+IOAPIC is accessed through MMIO, and there are actually only two 32-bit registers available for access, namely I/O Register Select (IOREGSEL, only the lower 8 bits are valid) and I/O Window (IOWIN), and their physical addresses are 0xFEC0xy00 and 0xFEC0xy10. (Among them, x and y can be configured through APIC Base Address Relocation Register). The former provides Index, and its 0-7th bits represent the register number to be accessed, and the latter provides Data for reading and writing the IOAPIC register to be accessed.
 
-> **Info:** APIC Base Address Relocation Register是PIIX3芯片上的寄存器，PIIX3是90年代末Intel的南桥，后来南桥进入ICH系列后取消了该寄存器，但后来又增加了新的配置寄存器，将两个寄存器的地址变为0xFEC0x000和0xFEC0x010（其中x可配置）
+> **Info:** APIC Base Address Relocation Register is a register on the PIIX3 chip. PIIX3 is Intel's South Bridge in the late 1990s. Later, South Bridge cancelled the register after entering the ICH series, but later added a new configuration register , Change the addresses of the two registers to 0xFEC0x000 and 0xFEC0x010 (where x is configurable)
 ## Registers
-- IOAPIC ID (IOAPICID)，位于Index 0x0，第24-27位表示IOAPIC ID，用于标识IOAPIC
-- IOAPIC Version (IOAPICVER)，位于Index 0x1，只读
-    - 第0-7位表示APIC Version，取值应为0x11
-    - 第16-23位表示Maximum Redirection Entry，即Redirection Table的项数-1，取值应为0x17（即23）
-- IOAPIC Arbitration ID (IOAPICARB)，位于Index 0x2，只读，第24-27位表示Arb ID，用于APIC Bus的仲裁
-    - LAPIC之间以及LAPIC和IOAPIC之间的通信都是走APIC Bus，每个LAPIC和IOAPIC都有一个Arb ID用于仲裁，Arb ID最高者胜利，并将自己的ID置为0，其余各APIC的Arb ID则加一（除了原本Arb ID为15者，要将Arb ID置位胜利者原本的Arb ID值）。
-    > **Note:** APIC Bus是奔腾和P6 family使用的技术，从奔腾4开始LAPIC之间以及LAPIC和IOAPIC之间的通信都是走系统总线，不使用Arb ID进行仲裁，因此现在讨论Arb ID已没有意义。
-- Redirection Table (IOREDTBL[0:23])，位于Index 0x10-0x3F（每项64位），负责配置中断转发功能，其中每一项简称RTE（Redirection Table Entry）
+-IOAPIC ID (IOAPICID), located at Index 0x0, bits 24-27 represent IOAPIC ID, used to identify IOAPIC
+-IOAPIC Version (IOAPICVER), located at Index 0x1, read only
+    -Bits 0-7 indicate APIC Version, and the value should be 0x11
+    -Bits 16-23 indicate Maximum Redirection Entry, that is, the number of entries in the Redirection Table -1, and the value should be 0x17 (ie 23)
+-IOAPIC Arbitration ID (IOAPICARB), located at Index 0x2, read-only, bits 24-27 represent Arb ID, used for APIC Bus arbitration
+    -The communication between LAPIC and between LAPIC and IOAPIC is through APIC Bus. Each LAPIC and IOAPIC has an Arb ID for arbitration. The one with the highest Arb ID wins and sets its own ID to 0. The rest of the APIC The Arb ID is increased by one (except for those with the original Arb ID of 15, the Arb ID should be set to the original Arb ID value of the winner).
+    > **Note:** APIC Bus is the technology used by Pentium and P6 family. Starting from Pentium 4, the communication between LAPIC and between LAPIC and IOAPIC is through the system bus and does not use Arb ID for arbitration, so Arb is now discussed. ID has no meaning.
+-Redirection Table (IOREDTBL[0:23]), located at Index 0x10-0x3F (64 bits each), responsible for configuring interrupt forwarding functions, each of which is referred to as RTE (Redirection Table Entry)
 
 ## Interrupt Redirection
-当一个中断来到IOAPIC时，就要根据Redirection Table发送给CPU(s)，这张转发表中的表项RTE的内容如下：
-- 第56-63位为Destination，代表目的CPU(s)，Physical模式则为APIC ID，Logical模式则为MDA
-    - Physical模式下，仅第56-59位有效，第60-63位必须取0
-- 第16位为Mask，取0表示允许接受中断，取1表示禁止，reset后初始值为1
-- 第15位为Trigger Mode，取0表示edge triggered，取1表示level triggered
-- 第14位为Remote IRR，只读且只对level triggered中断有意义，取1代表目的CPU已经接受中断，当收到CPU发来的EOI后，变回0表示中断已经完成
-    > **Note:** Remote IRR取1时的作用，实际上是阻止Level Triggered的IRQ line上的Active信号再次触发一个中断。设想若Active信号会产生中断，则只要信号保持Active（e.g. 高电平），就会不断触发中断，这显然是不正确的，故需要由Remote IRR位将中断阻塞。由此可见，CPU应该先设法让IRQ line回到Inactive状态，然后再进行EOI，否则该中断将再次产生。
-- 第13位为Interrupt Input Pin Polarity，取0表示active high，取1表示active low
-- 第12位为Delivery Status（只读），取0表示空闲，取1表示CPU尚未接受中断（尚未将中断存入IRR）
-    - 若目的CPU对某Vector已经有两个中断在Pending，IOAPIC等于可以为该Vector提供第三个Pending的中断
-- 第11位为Destination Mode，取0表示Physical，取1表示Logical
-- 第8-10位为Delivery Mode，有以下几种取值：
-    - 000 (Fixed)：按Vector的值向目标CPU(s)发送相应的中断向量号
-    - 001 (Lowest Priority)：按Vector的值向Destination决定的所有目标CPU(s)中Priority最低的CPU发送相应的中断向量号
-        - 关于该模式，详见Intel IA32手册第三册第十章
-    - 010 (SMI)：向目标CPU(s)发送一个SMI，此模式下Vector必须为0，SMI必须是edge triggered的
-    - 100 (NMI)：向目标CPU(s)发送一个NMI（走#NMI引脚），此时Vector会被忽略，NMI必须是edge triggered的
-    - 101 (INIT)：向目标CPU(s)发送一个INIT IPI，导致该CPU发生一次INIT（INIT后的CPU状态参考Intel IA32手册第三册表9-1），此模式下Vector必须为0，且必须是edge triggered
-        > **Info:** CPU在INIT后其APIC ID和Arb ID（只在奔腾和P6上存在）不变
-    - 111（ExtINT）：向目标CPU(s)发送一个与8259A兼容的中断信号，将会引起一个INTA周期，CPU(s)在该周期向外部控制器索取Vector，ExtINT必须是edge triggered的
-- 第0-7位为Vector，即目标CPU收到的中断向量号，有效范围为16-254（0-15保留，255为全局广播）
+When an interrupt comes to IOAPIC, it will be sent to the CPU(s) according to the Redirection Table. The contents of the RTE entry in this forwarding table are as follows:
+-The 56th-63th digits are Destination, which represents the destination CPU(s), the Physical mode is APIC ID, and the Logical mode is MDA
+    -In Physical mode, only digits 56-59 are valid, and digits 60-63 must be 0
+-The 16th bit is Mask, 0 means accepting interrupts is allowed, 1 means forbidden, the initial value is 1 after reset
+-The 15th bit is Trigger Mode, 0 means edge triggered, 1 means level triggered
+-The 14th bit is Remote IRR, which is read-only and only meaningful for level triggered interrupts. Take 1 to indicate that the target CPU has accepted the interrupt. After receiving the EOI from the CPU, it changes back to 0 to indicate that the interrupt has been completed.
+    > **Note:** The effect of Remote IRR when set to 1, actually prevents the Active signal on the Level Triggered IRQ line from triggering an interrupt again. Imagine that if the Active signal will generate an interrupt, as long as the signal remains Active (eg high), the interrupt will continue to be triggered. This is obviously incorrect, so the interrupt needs to be blocked by the Remote IRR bit. It can be seen that the CPU should try to return the IRQ line to the Inactive state, and then perform EOI, otherwise the interrupt will be generated again.
+-The 13th place is Interrupt Input Pin Polarity, 0 means active high, 1 means active low
+-The 12th bit is Delivery Status (read only), 0 means idle, 1 means the CPU has not yet accepted the interrupt (the interrupt has not been stored in the IRR)
+    -If the target CPU already has two interrupts pending for a Vector, IOAPIC can provide the third pending interrupt for the Vector.
+-The 11th bit is Destination Mode, 0 means Physical, and 1 means Logical
+-Bits 8-10 are Delivery Mode, with the following values:
+    -000 (Fixed): Send the corresponding interrupt vector number to the target CPU(s) according to the value of Vector
+    -001 (Lowest Priority): Send the corresponding interrupt vector number to the CPU with the lowest Priority among all target CPU(s) determined by Destination according to the value of Vector
+        -About this mode, please refer to Chapter 10 of Volume 3 of Intel IA32 Manual
+    -010 (SMI): Send an SMI to the target CPU(s). In this mode, Vector must be 0, and SMI must be edge triggered
+    -100 (NMI): Send an NMI to the target CPU(s) (take the #NMI pin). At this time, the Vector will be ignored, and the NMI must be edge triggered
+    -101 (INIT): Send an INIT IPI to the target CPU(s), which causes an INIT to occur on the CPU (refer to Table 9-1 of Volume 3 of the Intel IA32 Manual for the CPU status after INIT). In this mode, Vector must be 0. And must be edge triggered
+        > **Info:** The APIC ID and Arb ID of the CPU after INIT (only exists on Pentium and P6) remain unchanged
+    -111 (ExtINT): Sending an interrupt signal compatible with 8259A to the target CPU(s) will cause an INTA cycle. The CPU(s) will request the Vector from the external controller during this cycle. ExtINT must be edge triggered
+-Bits 0-7 are Vector, which is the interrupt vector number received by the target CPU. The valid range is 16-254 (0-15 reserved, 255 is global broadcast)
 
 ### Destination Mode
-Physical Mode表示Destination的取值为目的LAPIC的APIC ID。Logical Mode表示Destination的取值为Message Destination Address（MDA），可以用于引用一组LAPIC（即可用于Multicast）。关于MDA，详见Intel IA32手册第三册第十章。
+Physical Mode indicates that the value of Destination is the APIC ID of the destination LAPIC. Logical Mode means that the value of Destination is Message Destination Address (MDA), which can be used to reference a group of LAPIC (that is, for Multicast). For MDA, please refer to Chapter 10 of Volume 3 of Intel IA32 Manual.
 
-如果使用Logical Mode寻址模式引用了一组CPU，同时选择了Lowest Priority发送模式，则中断最终会发给这组CPU中优先级最低的CPU。（优先级的确定可参考Intel IA32手册第三册第十章，其中一种方法是依据LAPIC中的TPR寄存器）
+If a group of CPUs are referenced using the Logical Mode addressing mode and the Lowest Priority sending mode is selected at the same time, the interrupt will eventually be sent to the CPU with the lowest priority in this group of CPUs. (For the determination of priority, please refer to Chapter 10 of Book 3 of Intel IA32 Manual. One method is based on the TPR register in LAPIC)
 
 ### Pin
-根据手册，IOAPIC的24个中断输入引脚通常如下连接：
+According to the manual, the 24 interrupt input pins of IOAPIC are usually connected as follows:
 
-- Pin #1连接到键盘中断（IRQ1）
-- Pin #2连接到IRQ0
-- Pin #3-#11,#14,#15，分别连接到ISA IRQ[3:7,8#,9:11,14:15]
-- Pin #12连接到鼠标中断（IRQ12/M）
-- Pin #16-#19代表PCI IRQ[0:3]
-- Pin #20-#21代表Motherboard IRQ[0:1]
-- Pin #23代表SMI中断，若Mask掉，则SMI中断会从IOAPIC的#SMIOUT引脚引出，否则会由IOAPIC根据RTE #23转发
+-Pin #1 is connected to the keyboard interrupt (IRQ1)
+-Pin #2 is connected to IRQ0
+-Pin #3-#11,#14,#15, respectively connected to ISA IRQ[3:7,8#,9:11,14:15]
+-Pin #12 is connected to the mouse interrupt (IRQ12/M)
+-Pin #16-#19 represents PCI IRQ[0:3]
+-Pin #20-#21 represents Motherboard IRQ[0:1]
+-Pin #23 represents the SMI interrupt. If the Mask is off, the SMI interrupt will be drawn from the #SMIOUT pin of IOAPIC, otherwise it will be forwarded by IOAPIC according to RTE #23
 
-上述描述代表了PIIX3芯片组时期的典型接法，若要了解现在的芯片组是如何连接这些引脚的，还应查询最新芯片组的datasheet。
+The above description represents the typical connection of the PIIX3 chipset. If you want to understand how the current chipset is connected to these pins, you should also check the datasheet of the latest chipset.
 
-值得注意的是，若某个设备（如键盘控制器）的中断信号通过IRQ line连接到PIC，则它也会连接到IOAPIC的中断输入引脚。例如键盘控制器通过IRQ1连接到PIC，同时也通过Pin #1连接到IOAPIC。因此，若PIC和IOAPIC同时启用，可能会造成设备产生一个中断，CPU收到**两次**中断，故必须屏蔽其中一个而只用另一个，通常我们会屏蔽PIC（这可以通过写入0xFF到PIC的OCW1实现）。
+It is worth noting that if the interrupt signal of a device (such as a keyboard controller) is connected to the PIC through the IRQ line, it will also be connected to the interrupt input pin of IOAPIC. For example, the keyboard controller is connected to the PIC through IRQ1, and also connected to IOAPIC through Pin #1. Therefore, if PIC and IOAPIC are enabled at the same time, it may cause the device to generate an interrupt. The CPU receives **twice** interrupts. Therefore, one of them must be shielded and only the other is used. Usually we will shield PIC (this can be done by writing 0xFF to OCW1 implementation of PIC).
 
-事实上，约定俗成地，人们通常将系统中的第一个IOAPIC（如果有多个的话）的前16个Pin和PIC的16个IRQ相对应。也就是说Pin #x和IRQ x中的中断信号相同（0 <= x < 16）。其中有两个例外，一是Master PIC的INTR输出引脚要连接到IOAPIC的Pin #0（这也是约定俗成的要求，MP Spec并未规定PIC的INTR输出一定要连接到IOAPIC），故Pin #0不对应与IRQ0，二是Pin #2对应于IRQ0，这是由于IRQ2是Slave PIC，无需对应于IOAPIC Pin，而Pin #0又没有连到IRQ0，正好将Pin #2和IRQ0连接起来。
+In fact, by convention, people usually correspond the first 16 Pins of the first IOAPIC (if there are more than one) in the system to the 16 IRQs of the PIC. That is to say, the interrupt signal in Pin #x and IRQ x is the same (0 <= x <16). There are two exceptions. One is that the INTR output pin of Master PIC must be connected to Pin #0 of IOAPIC (this is also a conventional requirement, MP Spec does not stipulate that the INTR output of PIC must be connected to IOAPIC), so Pin #0 It does not correspond to IRQ0. The second is that Pin #2 corresponds to IRQ0. This is because IRQ2 is a slave PIC and does not need to correspond to IOAPIC Pin, and Pin #0 is not connected to IRQ0, just connecting Pin #2 and IRQ0.
 
-## IOAPIC till ICH9
-随着芯片集成度的提升，IOAPIC芯片已被集成到了南桥内，我们可以从历代南桥手册（Datasheet）中查询到其pin接到的是什么设备，增加了什么功能。此处介绍QEMU模拟的Q35芯片组中的ICH9南桥中的IOAPIC。
+## IOAPIC to ICH9
+With the improvement of chip integration, the IOAPIC chip has been integrated into the South Bridge. We can find out what device its pin is connected to and what functions have been added from the previous South Bridge manual (Datasheet). Here introduces the IOAPIC in the ICH9 South Bridge in the Q35 chipset emulated by QEMU.
 
 ### IOxAPIC
-从ICH1开始，IOAPIC就被集成到了南桥里，并且ICH中集成的不再是原版的82093AA IOAPIC，而是经过修改的版本，可以称之为IOxAPIC。下面介绍历代IOAPIC经过的改动：
+Starting from ICH1, IOAPIC has been integrated into the South Bridge, and the integrated ICH is no longer the original 82093AA IOAPIC, but a modified version, which can be called IOxAPIC. The following describes the changes that have been made to the IOAPIC in the past:
 
 #### ICH1
-ICH1虽然仍保持IOAPIC Version为0x11，但实际上进行了一些改动：
-- 取消了APIC Base Address Relocation Register，使得Index Register（IOREGSEL）和Data Register（IOWIN）固定位于0xFEC00000和0xFEC00010
-- 增加了两个32位的Write Only的寄存器，分别是IRQ Pin Assertion Register和EOI Register，分别位于0xFEC00020和0xFEC00040
-- IOAPIC Version Register的第15位表示是否支持IRQ Assertion Register（此前是保留位，默认取0）
+Although ICH1 still maintains the IOAPIC Version as 0x11, some changes have actually been made:
+-Canceled the APIC Base Address Relocation Register, making Index Register (IOREGSEL) and Data Register (IOWIN) fixed at 0xFEC00000 and 0xFEC00010
+-Added two 32-bit Write Only registers, IRQ Pin Assertion Register and EOI Register, located at 0xFEC00020 and 0xFEC00040
+-The 15th bit of the IOAPIC Version Register indicates whether the IRQ Assertion Register is supported (previously it was a reserved bit, the default value is 0)
 
-IRQ Pin Assertion Register：第0-4位表示IRQ Number，其余位保留。每当对该寄存器写入val时，就会使对应的IRQ发生中断。
+IRQ Pin Assertion Register: Bits 0-4 represent IRQ Number, and the remaining bits are reserved. Whenever val is written to this register, the corresponding IRQ will be interrupted.
 
-> **Info:** IRQ Assertion Register是MSI的早期实现使用的机制。当时MSI Address Register填写0xFEC00020，MSI Data Register填写IRQ Number，即可进行一次MSI。后来MSI改为使用Upstream Memory Write的方式，直接向CPU进行写入，由CPU直接处理MSI，IOAPIC中便取消了该功能。
+> **Info:** IRQ Assertion Register is a mechanism used by early implementations of MSI. At that time, fill in 0xFEC00020 in the MSI Address Register and fill in the IRQ Number in the MSI Data Register to perform an MSI. Later, MSI changed to use Upstream Memory Write to write directly to the CPU, and the CPU directly processed the MSI. This function was cancelled in IOAPIC.
 
-EOI Register：第0-7位表示interrupt vector，其余位保留。每当对该寄存器写入val时，就会清除interrupt vector为val的RTE表项的Remote IRR位。
+EOI Register: Bits 0-7 represent interrupt vector, and the remaining bits are reserved. Whenever val is written to this register, the Remote IRR bit of the RTE entry whose interrupt vector is val will be cleared.
 
 #### PCI Age (ICH2 - ICH5)
-从ICH2开始IOAPIC Version改为0x20（文档写作0x02，实际上是0x20，Version为0x2X表示支持PCI 2.2），有如下改动：
-- 增加了一个间接引用的寄存器，Boot Configuration Register，位于index 0x3，可读写，仅最低位有效，取0表示APIC总线发送中断消息（默认取0），取1表示通过系统总线（FSB）发送中断消息
+Starting from ICH2, IOAPIC Version has been changed to 0x20 (the document is written as 0x02, which is actually 0x20, and Version 0x2X indicates that PCI 2.2 is supported), with the following changes:
+-Added an indirect referenced register, Boot Configuration Register, located at index 0x3, readable and writable, only the lowest bit is valid, 0 means APIC bus sending interrupt message (default 0), 1 means sending via system bus (FSB) Interrupt message
 
-ICH4未改动IOAPIC Version，但又扩展了RTE表项，从ICH4开始RTE的第48-55位表示EDID（Extended Destination ID），当通过系统总线发送中断消息时，EDID是address的第4-11位。
-> **PS:** 文档原文为"They become bits 11:4 of the address"，但LAPIC能接受的Destination只有8位或32位（x2APIC），且IOAPIC的Destination只有在Physical Mode时才只有4位，能与EDID拼接。EDID的具体作用和在OS中的使用尚待考察。
+ICH4 has not changed the IOAPIC Version, but has expanded the RTE entry. Starting from ICH4, the 48-55th bits of the RTE represent the EDID (Extended Destination ID). When sending interrupt messages through the system bus, the EDID is the 4-11th bits of the address .
+> **PS:** The original document is "They become bits 11:4 of the address", but the destination that LAPIC can accept is only 8 or 32 bits (x2APIC), and the Destination of IOAPIC is only 4 when in Physical Mode Bit, can be spliced ​​with EDID. The specific role of EDID and its use in OS remains to be investigated.
 
-ICH5未改动IOAPIC Version，但删除了Arbitration ID Register和Boot Configuration Register，标志着对APIC Bus的兼容彻底移除（此时已经是2003年，离最后一款P6 family的CPU已经过去了好几年）。
+ICH5 has not changed the IOAPIC Version, but deleted the Arbitration ID Register and Boot Configuration Register, marking the complete removal of APIC Bus compatibility (this is already 2003, and several years have passed since the last CPU of the P6 family).
 
 #### PCIe Age (ICH6 - ICH9)
-ICH6首次支持PCIe，有如下改动：
-- 删除了IRQ Pin Assertion Register
+ICH6 supports PCIe for the first time, with the following changes:
+-Removed IRQ Pin Assertion Register
 
-从ICH8开始，IOAPIC寄存器的地址又变为可变，通过Chipset Configuration Register中的OIC（Other Interrupt Control）寄存器第4-7位（APIC Range Select，ASEL）控制IOAPIC地址的第12-15位。此时IOAPIC的地址范围为0xFEC0x000-0xFEC0x040（其中x可配置）
+Starting from ICH8, the address of the IOAPIC register becomes variable again, and bits 12-15 of the IOAPIC address are controlled by bits 4-7 (APIC Range Select, ASEL) of the OIC (Other Interrupt Control) register in the Chipset Configuration Register. At this time, the address range of IOAPIC is 0xFEC0x000-0xFEC0x040 (where x is configurable)
 
 ### IOxAPIC Interrupt Delivery
-最初，IOAPIC是通过向APIC Bus发送Message实现中断的发送的，到ICH1还是如此，但从ICH2开始就支持了通过系统总线发送中断。这里所谓的通过系统总线发送中断，其实和MSI的方式是相同的，都是向特定地址写入特定数据，CPU会监听到这个写入，于是把它解释成一个中断请求，并让LAPIC处理该请求。事实上，其地址和数据的格式同MSI也是相同的。
+Initially, IOAPIC realized interrupt sending by sending a Message to APIC Bus. This is still the case in ICH1, but since ICH2, it has supported sending interrupts through the system bus. The so-called sending interrupts through the system bus here is actually the same as the MSI method. They both write specific data to a specific address. The CPU will listen to this write, so it interprets it as an interrupt request and lets LAPIC handle the request. In fact, the address and data format is the same as MSI.
 
-这种技术在ICH2中称为Front-Side Interrupt Delivery，在ICH3、ICH4中称为System Bus Interrupt Delivery，在ICH5-ICH9中称为FSB Interrupt Delivery，本质上指的都是同一件事。
+This technology is called Front-Side Interrupt Delivery in ICH2, System Bus Interrupt Delivery in ICH3 and ICH4, and FSB Interrupt Delivery in ICH5-ICH9, which essentially refers to the same thing.
 
-由此可见，ICH6中引入的现代意义上的MSI，实际上就是从ICH2开始的FSB Interrupt Delivery，只不过前者直接从PCI Device发到CPU，后者经过IOAPIC转发到CPU，但在CPU看来都是相同的。
+It can be seen that the modern MSI introduced in ICH6 is actually FSB Interrupt Delivery starting from ICH2, but the former is sent directly from the PCI Device to the CPU, and the latter is forwarded to the CPU via IOAPIC, but it seems to the CPU. Are the same.
 
-需要注意的是，FSB Interrupt Delivery只支持普通中断，不支持SMI、NMI、INIT中断，不能在Delivery Mode field中填写SMI、NMI或INIT（ICH2未提到该规定，ICH3-ICH9都有此规定）。OS可以通过ACPI表（由BIOS构造）查询芯片组是否支持FSB Interrupt Delivery特性。
+It should be noted that FSB Interrupt Delivery only supports ordinary interrupts, and does not support SMI, NMI, INIT interrupts. You cannot fill in SMI, NMI or INIT in the Delivery Mode field (ICH2 does not mention this regulation, ICH3-ICH9 has this regulation) . The OS can query whether the chipset supports the FSB Interrupt Delivery feature through the ACPI table (constructed by the BIOS).
 
-### 配置
+### Configuration
 
-ICH9中IRQ pin的配置如下：
+The IRQ pin configuration in ICH9 is as follows:
 
 ![ich9_ioapic_1](/assets/ich9_ioapic_1.png)
 ![ich9_ioapic_2](/assets/ich9_ioapic_2.png)
