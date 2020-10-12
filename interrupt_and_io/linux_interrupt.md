@@ -1,21 +1,21 @@
 # Linux Interrupt
 ## Facts of Hardware
-在x86 CPU上，中断需通过IDT中的表项分发，若通过Interrupt Gate进入中断处理例程，则EFLAGS的IF（Interrupt Flag）会被清零（相当于执行`CLI`指令），从而禁用中断，直到执行`IRET`指令从中断处理例程中返回时，才会重置IF。若通过的是Trap Gate，则不会对IF作任何操作。
+On x86 CPUs, interrupts need to be distributed through the entries in the IDT. If the interrupt processing routine is entered through the Interrupt Gate, the IF (Interrupt Flag) of EFLAGS will be cleared (equivalent to executing the `CLI` instruction) to disable the interrupt , IF will not be reset until the execution of the ʻIRET` instruction returns from the interrupt processing routine. If the trap gate is passed, no operation will be performed on the IF.
 
 ## Linux
-Linux中，在进入一个中断处理例程后，会立即重新开启中断，但该中断自己会在所有CPU上都被屏蔽，从而防止其自身重入。因此，在Linux中，中断处理例程不必是可重入的。
+In Linux, after entering an interrupt processing routine, the interrupt will be reopened immediately, but the interrupt itself will be shielded on all CPUs to prevent its own reentry. Therefore, in Linux, interrupt handling routines need not be reentrant.
 
-### SMP Affinity
-`/proc/interrupts`显示了中断被各CPU处理的次数。`/proc/irq/IRQ#/smp_affinity`是一个bitmap，表示第IRQ#个irq应被发送到哪些CPU上，每个bit代表一个CPU，如果有多于一个CPU被分配到某个irq，则会使用lowest priority mode，由硬件选取这一组CPU中优先级最低的CPU作为中断的目的地。优先级通常可以通过设置LAPIC的TPR寄存器来变更。
+### Junior Affinity
+`/proc/interrupts` shows the number of interrupts processed by each CPU. `/proc/irq/IRQ#/smp_affinity` is a bitmap, which indicates which CPUs the IRQ# irq should be sent to. Each bit represents a CPU. If more than one CPU is allocated to a certain irq, then The lowest priority mode is used, and the hardware selects the lowest priority CPU in this group of CPUs as the interrupt destination. The priority can usually be changed by setting the TPR register of LAPIC.
 
-SMP affinity也可以通过`/proc/irq/IRQ#/smp_affinity_list`查询和指定，它是一个CPU list，其形式形如`2`、`1-7`等。SMP affinity为32位、64位或128位宽，默认值通常是全1（即所有CPU都能收到），默认值可以通过`/proc/irq/default_smp_affinity`查询
+SMP affinity can also be queried and specified by `/proc/irq/IRQ#/smp_affinity_list`, which is a CPU list with the form of `2`, `1-7`, etc. SMP affinity is 32-bit, 64-bit or 128-bit wide. The default value is usually all 1s (that is, all CPUs can receive it). The default value can be queried through `/proc/irq/default_smp_affinity`
 
-实践中，通常会将每个IRQ绑定到一个单独的核，而不是一组核，因为同一个中断在同一个核上处理locality更好。并且lowest priority mode也不是完美的，它只保证总能仲裁选出一组CPU中的某一个，不保证能在这一组CPU之间load balance，例如一组CPU的优先级都相同时，可能每次选出的CPU都是同一个。
+In practice, each IRQ is usually bound to a separate core instead of a group of cores, because the same interrupt is better to handle locality on the same core. And the lowest priority mode is not perfect. It only guarantees that one of a group of CPUs can always be selected by arbitration, and it does not guarantee load balance between this group of CPUs. For example, when a group of CPUs have the same priority, it may The CPU selected each time is the same.
 
-不幸的是，Linux并不会设置CPU的TPR：
+Unfortunately, Linux does not set the CPU TPR:
 ```c
 // arch/x86/kernel/apic/apic.c
-// 下面这个片段证明Linux只会将TPR设为0，并不再变更
+// The following snippet proves that Linux will only set TPR to 0 and no longer change
 
 /*
  * Set Task Priority to 'accept all'. We never change this
@@ -25,22 +25,22 @@ value = apic_read(APIC_TASKPRI);
 value &= ~APIC_TPRI_MASK;
 apic_write(APIC_TASKPRI, value);
 ```
-因此当smp affinity为一个IRQ设置了超过一个CPU时，往往只有一个CPU在处理中断。
+Therefore, when smp affinity sets more than one CPU for an IRQ, often only one CPU is processing interrupts.
 
 ---
 
-通常采用红帽开发的`irqbalance`工具进行smp affinity的管理，该工具能分析系统的负载，每隔一段时间（默认是10秒）修改一次smp affinity。它会将每个IRQ绑定到一个CPU，并根据负载动态变更这个绑定，使这个IRQ在CPU间的分布均匀。它还有一个Power save模式，当发现系统中断负载较低时，会把所有中断都绑定到同一个CPU上，减少其他CPU的工作，让其他CPU可以进入休眠模式。
+The ʻirqbalance` tool developed by Red Hat is usually used to manage the smp affinity. This tool can analyze the load of the system and modify the smp affinity at regular intervals (10 seconds by default). It binds each IRQ to a CPU, and dynamically changes the binding according to the load, so that the IRQ is evenly distributed among the CPUs. It also has a Power save mode. When the system interrupt load is found to be low, it will bind all interrupts to the same CPU, reducing the work of other CPUs and allowing other CPUs to enter sleep mode.
 
 ---
 
-Linux内核中，设置smp affinity的工作在`kernel/irq/manage.c`中实现，关键函数为`setup_affinity(irq_desc, cpumask)`。该函数调用`irq_do_set_affinity`函数，后者再进一步调用`struct irq_chip`中的`irq_set_affinity`方法，调用到具体硬件的affinity设置代码。
+In the Linux kernel, the work of setting smp affinity is implemented in `kernel/irq/manage.c`, and the key function is `setup_affinity(irq_desc, cpumask)`. This function calls the ʻirq_do_set_affinity` function, which then further calls the ʻirq_set_affinity` method in the `struct irq_chip` to call the affinity setting code of the specific hardware.
 
-最终，`smp_affinity`这个bitmap被作为`cpumask`参数传入`struct apic`的`cpu_mask_to_apicid_and`方法，得到APIC Destination field用于填入硬件寄存器。APIC的每种配置方法都对应于一个`struct apic`对象，从而就有一种`cpu_mask_to_apicid_and`实现。
+Finally, the bitmap of `smp_affinity` is passed into the `cpu_mask_to_apicid_and` method of `struct apic` as the `cpumask` parameter to get the APIC Destination field to fill in the hardware registers. Each configuration method of APIC corresponds to a `struct apic` object, so there is a `cpu_mask_to_apicid_and` implementation.
 
 ### APIC initialization
 
-Linux启动时会选择一个APIC驱动（`struct apic`对象），32位下通过`arch/x86/kernel/apic/probe_32.c`的`generic_apic_probe`函数实现，该函数会调用每个APIC驱动对象的`probe`方法查询是否可用，64位下通过`arch/x86/kernel/apic/probe_64.c`的`default_acpi_madt_oem_check`函数实现，该函数会调用每个APIC驱动对象的`acpi_madt_oem_check`方法，根据ACPI表选择驱动。APIC驱动被检查的顺序就是Makefile中指定的编译顺序。
+An APIC driver (`struct apic` object) is selected when Linux is started. Under 32-bit, it is implemented by the `generic_apic_probe` function of ʻarch/x86/kernel/apic/probe_32.c`, which will call each APIC driver object. The `probe` method is used to query whether it is available. In 64-bit mode, the `default_acpi_madt_oem_check` function of ʻarch/x86/kernel/apic/probe_64.c` is implemented. This function will call the ʻacpi_madt_oem_check` method of each APIC driver object, according to the ACPI table Select the driver. The order in which the APIC driver is checked is the compilation order specified in the Makefile.
 
-从编译顺序可知，系统会优先选择x2APIC，而在x2APIC和xAPIC模式内部，默认模式都是Logical + Lowest Priority模式，除非系统不支持从而只能选择Physical + Fixed模式。
+From the compilation order, the system will give priority to x2APIC. In x2APIC and xAPIC modes, the default mode is Logical + Lowest Priority mode, unless the system does not support it and can only choose Physical + Fixed mode.
 
-> **推论：** 对于Physical + Fixed模式，其`cpu_mask_to_apicid_and`方法会选取`cpumask`中第一个找到的在线CPU，作为APIC Destination。因此假若APIC被配置为该模式，`smp_affinity`会退化到在一组中固定选择一个CPU。
+> **Inference:** For Physical + Fixed mode, the `cpu_mask_to_apicid_and` method will select the first online CPU found in `cpumask` as the APIC Destination. Therefore, if APIC is configured in this mode, `smp_affinity` will degenerate to a fixed selection of a CPU in a group.
