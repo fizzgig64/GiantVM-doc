@@ -1,55 +1,57 @@
-## 定义
+## Definition
 
-### 传统(物理机)中断
+### Traditional (physical machine) interrupt
 
-中断从某个设备发出，送到IOAPIC。IOAPIC查PRT表找到对应的表项PTE，得知目标LAPIC。于是格式化出中断消息发送给LAPIC，通知置remote irr为1(level)。
+The interrupt is sent from a device and sent to IOAPIC. IOAPIC checks the PRT table to find the corresponding entry PTE, and knows the target LAPIC. So the interrupt message is formatted and sent to LAPIC, and the remote irr is set to 1 (level) in the notification.
 
-LAPIC收到中断消息后，根据向量号设置IRR后，进行中断选取，取得取得优先级最高的中断后，清除IRR，设置ISR，提交CPU进行中断处理，CPU处理完中断后，写LAPIC的EOI，通知IOAPIC清除remote irr(level且deassert)。
+After LAPIC receives the interrupt message, it sets the IRR according to the vector number, and then selects the interrupt. After obtaining the interrupt with the highest priority, clears the IRR, sets the ISR, and submits it to the CPU for interrupt processing. After the CPU processes the interrupt, writes the LAPIC EOI. Notify IOAPIC to clear remote irr (level and deassert).
 
-### QEMU+KVM(虚拟机)中断
+### QEMU+KVM (Virtual Machine) Interrupt
 
-#### 中断退出
-虚拟机发生中断时，主动使guest发生 VMEXIT ，这样接下来能够在 VMENTRY 前进行中断注入。
+#### Interrupt exit
 
-#### 中断注入
-通过将中断写入 VMCS 的 VM-Entry interruption-infomation field ，实现向guest注入中断。
+When the virtual machine is interrupted, take the initiative to make the guest VMEXIT, so that interrupt injection can be performed before VMENTRY.
+
+#### Interrupt injection
+
+By writing the interrupt to the VM-Entry interruption-infomation field of VMCS, the interrupt can be injected into the guest.
 
 #### VMCS
-在 SDM 3 24.6 的 VM-EXECUTION CONTROL FIELDS 中定义了：
+Defined in VM-EXECUTION CONTROL FIELDS of SDM 3 24.6:
 
 * Pin-Based VM-Execution Controls
-    负责控制 External-interrupt / NMI / Virtual NMIs 时是否发生VMExit，退回到KVM中。
+    Responsible for controlling whether VMExit occurs during External-interrupt / NMI / Virtual NMIs, and return to KVM.
 
-    比如 External-interrupt exiting 设置为1表示所有的外部中断都会产生VMExit，否则由VM自己处理
+    For example, if External-interrupt exiting is set to 1, all external interrupts will generate VMExit, otherwise the VM will handle it by itself
 
 * Secondary Processor-Based VM-Execution Controls - virtual-interrupt delivery
-    设置为1则当 VM entry/TPR virtualization/EOI virtualization/self-IPI virtualization/posted-interrupt processing 时会触发evaluate pending中断
+    Set to 1, when VM entry/TPR virtualization/EOI virtualization/self-IPI virtualization/posted-interrupt processing will trigger evaluate pending interrupt
 
-由于设置了 VMCS - Secondary Processor-Based VM-Execution Controls - virtualize APIC accesses 位，通过设置特定的VM-execution controls的位，使VM在访问APIC对应的页的时产生VMEXIT。
+Since the VMCS-Secondary Processor-Based VM-Execution Controls-virtualize APIC accesses bit is set, by setting the specific VM-execution controls bit, VMEXIT is generated when the VM accesses the page corresponding to the APIC.
 
-当该中断被recognized了，并且满足以下四个条件，就会触发该虚拟中断的delivery：
+When the interrupt is recognized and the following four conditions are met, the delivery of the virtual interrupt is triggered:
 
 1. RFLAGS.IF = 1
-2. 没有因为STI产生的blocking
-3. 没有因为MOV SS或者POP SS产生的blocking
+2. No blocking due to STI
+3. No blocking caused by MOV SS or POP SS
 4. Primary Processor-Based VM-Execution Controls中的 interrupt-window exiting bit 为0。
 
-虚拟中断的delivery会更新 guest interrupt status 中的RVI和SVI，并且在non-root环境下产生一个中断事件
+The virtual interrupt delivery will update the RVI and SVI in the guest interrupt status, and generate an interrupt event in the non-root environment
 
 
-#### 中断芯片
+#### Interrupt chip
 
-QEMU 和 KVM 都实现了对中断芯片的模拟，这是由于历史原因造成的。早在KVM诞生之前，QEMU就提供了一整套对设备的模拟，包括中断芯片。而KVM诞生之后，为了进一步提高中断性能，因此又在KVM中实现了一套中断芯片。我们可以通过QEMU的启动参数 kernel-irqchip 来决定使用谁的中断芯片(irq chip)。
+Both QEMU and KVM have realized the simulation of the interrupt chip, which is caused by historical reasons. Before the birth of KVM, QEMU provided a complete set of device simulations, including interrupt chips. After the birth of KVM, in order to further improve the interrupt performance, a set of interrupt chips was implemented in KVM. We can decide whose interrupt chip (irq chip) to use through the startup parameter kernel-irqchip of QEMU.
 
-* on： KVM 模拟全部
-* split： QEMU模拟IOAPIC和PIC，KVM模拟LAPIC
-* off： QEMU 模拟全部
+* on: KVM simulates all
+* Split: QEMU simulates IOAPIC and PIC, and KVM simulates LAPIC
+* off: QEMU simulates all
 
 
 #### GPIO(General-purpose input/output)
-从定义上，GPIO是一种通用的PIN，可以在运行时控制其作为input或者output。input可读，output可读写。
+By definition, GPIO is a universal PIN, which can be controlled as input or output at runtime. Input is readable and output is readable and writable.
 
-在QEMU中，大量使用GPIO来表示设备和中断控制器的PIN。和硬件实现一样，它分为IN和OUT。以以下的数据结构描述：
+In QEMU, GPIO is used extensively to represent the PIN of the device and interrupt controller. Like the hardware implementation, it is divided into IN and OUT. Described in the following data structure:
 
 ```c
 struct NamedGPIOList {
@@ -61,11 +63,11 @@ struct NamedGPIOList {
 };
 ```
 
-PIN的单元为 qemu_irq 。因此该结构维护了input qemu_irq数组的首地址，可以访问到所有input qemu_irq。同时维护了input和output的数目。
+The unit of PIN is qemu_irq. Therefore, the structure maintains the first address of the input qemu_irq array, and all input qemu_irq can be accessed. At the same time maintain the number of input and output.
 
-每个设备都会维护一个至多个 NamedGPIOList ，以链表形式组织(成员node就是用来串起来的)，用 DeviceState.gpios 指向。比如 8259 有一个拥有1个out和8个in的名为NULL的 NamedGPIOList 。
+Each device maintains one or more NamedGPIOList, organized in the form of a linked list (member node is used to string together), pointing to DeviceState.gpios. For example, 8259 has a NamedGPIOList named NULL with 1 out and 8 in.
 
-qemu_irq 是 IRQState 的指针，定义如下：
+qemu_irq is a pointer to IRQState, defined as follows:
 
 ```c
 struct IRQState {
@@ -77,13 +79,13 @@ struct IRQState {
 };
 ```
 
-通常来说，n为PIN号，opaque指向所属设备，而 handler 是该PIN的回调函数。
+Generally speaking, n is the PIN number, opaque points to the owning device, and handler is the callback function of the PIN.
 
-当有信号要发送给设备的某个PIN时，就调用对应input qemu_irq 的handler，表示设备收到了信号，于是handler设置设备的一些属性，表示其状态发生了改变。如果需要输出，则调用某个output qemu_irq 的handler，表示将信号发送出去。
+When there is a signal to be sent to a certain PIN of the device, the handler corresponding to input qemu_irq is called to indicate that the device has received the signal, so the handler sets some attributes of the device to indicate that its state has changed. If output is needed, call a handler of output qemu_irq, which means to send the signal.
 
-output PIN在初始化时往往设置为 qemu_irq 指针，在其上游设备(接收该设备的输出)初始化时，会将该指针指向上游设备自己的 input qemu_irq。因此当设备进行输出时，调用的是上游设备对应input qemu_irq的handler，这样就模拟了一个信号从一个设备传递到另一个设备的过程。
+The output PIN is often set to the qemu_irq pointer during initialization. When the upstream device (receiving the output of the device) is initialized, the pointer will point to the input qemu_irq of the upstream device. Therefore, when the device outputs, it calls the handler corresponding to the input qemu_irq of the upstream device, which simulates the process of transmitting a signal from one device to another.
 
-根据q35的 qom-tree ，我们发现有GPIO的设备主要为 PIC 和 IOAPIC ：
+According to the qom-tree of q35, we found that the devices with GPIO are mainly PIC and IOAPIC:
 
 ```
 /machine (pc-q35-2.8-machine)
@@ -141,15 +143,15 @@ output PIN在初始化时往往设置为 qemu_irq 指针，在其上游设备(�
 
 #### GSI(Global System Interrupt)
 
-ACPI(Advanced Configuration and Power Interface)规范 为x86机器定义了统一的配置接口，中断也不例外。10年前，人们觉得计算机架构处于并将长期处于PIC和APIC混用的阶段，比如QEMU的经典架构q35，于是定义了GSI。
+The ACPI (Advanced Configuration and Power Interface) specification defines a unified configuration interface for x86 machines, and interrupts are no exception. Ten years ago, people felt that the computer architecture was and will be at the stage of mixing PIC and APIC for a long time, such as QEMU's classic architecture q35, so GSI was defined.
 
-GSI为系统中每个中断控制器上的input pin都指定一个唯一的中断号：
+GSI assigns a unique interrupt number to the input pin on each interrupt controller in the system:
 
-* 对于 8259A ，GSI直接映射到ISA IRQ。比如 GSI 0 映射 IRQ 0。
-* 对于 IOAPIC ，每一个IOAPIC都会被BIOS分配一个GSI base。映射时为base + pin。比如IOAPIC0的GSI base为0，有24个引脚，则它们对应的GSI为0-23。IOAPIC1的GSI base为24，有16个引脚，则范围为24-39，以此类推。
+* For 8259A, GSI maps directly to ISA IRQ. For example, GSI 0 maps IRQ 0.
+* For IOAPIC, each IOAPIC will be assigned a GSI base by the BIOS. When mapping, it is base + pin. For example, if the GSI base of IOAPIC0 is 0 and there are 24 pins, their corresponding GSI is 0-23. The GSI base of IOAPIC1 is 24, with 16 pins, the range is 24-39, and so on.
 
 
-QEMU使用 GSIState 来描述GSI：
+QEMU uses GSIState to describe GSI:
 
 ```c
 typedef struct GSIState {
@@ -158,30 +160,30 @@ typedef struct GSIState {
 } GSIState;
 ```
 
-对于Q35，在machine初始化函数 pc_q35_init 中负责对GSI进行初始化，同时填充GPIO。
+For Q35, the machine initialization function pc_q35_init is responsible for initializing GSI and filling GPIO at the same time.
 
 
 
 
 
-## 中断模拟
+## Interrupt simulation
 
-### KVM模拟芯片
+### KVM analog chip
 
 #### PIC
-KVM使用 kvm_pic 模拟8259A芯片。它的指针被保存在 kvm.arch.vpic 中。
+KVM uses kvm_pic to simulate the 8259A chip. Its pointer is stored in kvm.arch.vpic.
 
 ```c
 struct kvm_pic {
     spinlock_t lock;
     bool wakeup_needed;
     unsigned pending_acks;
-    struct kvm *kvm;
-    struct kvm_kpic_state pics[2]; /* 0 is master pic, 1 is slave pic */    // 维护了中断芯片上所有寄存器和状态
+    struct sqm * sqm;
+    struct kvm_kpic_state pics[2]; /* 0 is master pic, 1 is slave pic */ // Maintain all registers and states on the interrupt chip
     int output;     /* intr from master PIC */
-    struct kvm_io_device dev_master;                                        // 主片设备
-    struct kvm_io_device dev_slave;                                         // 从片设备
-    struct kvm_io_device dev_eclr;                                          // 控制中断触发模式的寄存器
+    struct kvm_io_device dev_master; // master device
+    struct kvm_io_device dev_slave; // slave device
+    struct kvm_io_device dev_eclr; // Register to control interrupt trigger mode
     void (*ack_notifier)(void *opaque, int irq);
     unsigned long irq_states[PIC_NUM_PINS];
 };
@@ -208,9 +210,9 @@ struct kvm_kpic_state {
 };
 ```
 
-dev_master 、 dev_slave 、 dev_eclr 定义了设备对应的操作函数，同时通过 kvm_io_bus_register_dev 将它们注册到PIO总线(KVM_PIO_BUS)上。
+dev_master, dev_slave, dev_eclr ​​define the operation functions corresponding to the device, and at the same time register them to the PIO bus (KVM_PIO_BUS) through kvm_io_bus_register_dev.
 
-当需要对设备进行读写时，会调用到以下函数：
+When you need to read and write to the device, the following functions are called:
 
 ```c
 static const struct kvm_io_device_ops picdev_master_ops = {
@@ -231,24 +233,24 @@ static const struct kvm_io_device_ops picdev_eclr_ops = {
 
 #### IOAPIC
 
-KVM只模拟了一种IOAPIC，名为 kvm_ioapic 。它的指针被保存在 kvm.kvm_arch.vioapic 中。
+KVM only simulates one type of IOAPIC, named kvm_ioapic. Its pointer is stored in kvm.kvm_arch.vioapic.
 
 ```c
 struct kvm_ioapic {
     u64 base_address;
     u32 ioregsel;
     u32 id;
-    u32 irr;                                                        // IRR寄存器
+    u32 irr; // IRR register
     u32 pad;
-    union kvm_ioapic_redirect_entry redirtbl[IOAPIC_NUM_PINS];      // PRT，每个表项代表一个引脚
+    union kvm_ioapic_redirect_entry redirtbl[IOAPIC_NUM_PINS]; // PRT, each entry represents a pin
     unsigned long irq_states[IOAPIC_NUM_PINS];
     struct kvm_io_device dev;
-    struct kvm *kvm;
+    struct sqm * sqm;
     void (*ack_notifier)(void *opaque, int irq);
     spinlock_t lock;
     struct rtc_status rtc_status;
     struct delayed_work eoi_inject;
-    u32 irq_eoi[IOAPIC_NUM_PINS];
+    u32 irq_eoi [IOAPIC_NUM_PINS];
     u32 irr_delivered;
 };
 
@@ -256,22 +258,22 @@ struct kvm_ioapic {
 union kvm_ioapic_redirect_entry {
     u64 bits;
     struct {
-        u8 vector;                  // 中断向量(ISRV)号，指定中断对应的vector。优先级 = vector / 16，越大越高
-        u8 delivery_mode:3;         // 传送模式，指定该中断以何种方式发送给目的LAPIC，有Fixed、Lowest Priority、SMI、NMI、INIT、ExtINT
-        u8 dest_mode:1;             // 目的地模式，0为Physical Mode，1为Logical Mode
-        u8 delivery_status:1;       // 传送状态，0为IDEL(没有中断)，1为Send Pending(已收到该中断但由于某种原因还未发送)
-        u8 polarity:1;              // 管脚极性，指定该管脚的有效电平是高电平还是低电平，0为高，1为低
-        u8 remote_irr:1;            // 远程IRR，(中断水平触发)当LAPIC收到该中断后设为1，LAPIC写入EOI时清0
-        u8 trig_mode:1;             // 触发模式，1为水平，2为边缘
-        u8 mask:1;                  // 中断屏蔽位，1时屏蔽该中断
-        u8 reserve:7;               // 未用
-        u8 reserved[4];             // 未用
-        u8 dest_id;                 // 目标，Physical Mode下表示目标LAPIC的ID，Logical Mode下表示一组CPU?
+        u8 vector; // Interrupt vector (ISRV) number, which specifies the vector corresponding to the interrupt. Priority = vector / 16, the bigger the higher
+        u8 delivery_mode:3; // Delivery mode, specify how the interrupt is sent to the destination LAPIC, including Fixed, Lowest Priority, SMI, NMI, INIT, ExtINT
+        u8 dest_mode:1; // Destination mode, 0 is Physical Mode, 1 is Logical Mode
+        u8 delivery_status:1; // Delivery status, 0 is IDEL (no interrupt), 1 is Send Pending (the interrupt has been received but has not been sent for some reason)
+        u8 polarity:1; //Pin polarity, specify whether the effective level of the pin is high or low, 0 is high, 1 is low
+        u8 remote_irr:1; //Remote IRR, (interrupt level trigger) when LAPIC receives the interrupt, it is set to 1, and LAPIC is cleared to 0 when writing EOI
+        u8 trig_mode:1; // Trig mode, 1 is horizontal, 2 is edge
+        u8 mask:1; //Interrupt mask bit, mask the interrupt when 1
+        u8 reserve:7; // not used
+        u8 reserved[4]; // not used
+        u8 dest_id; // Target, indicates the ID of the target LAPIC in Physical Mode, and indicates a group of CPUs in Logical Mode?
     } fields;
 };
 ```
 
-在收到QEMU发来的 KVM_CREATE_IRQCHIP 后，调用 kvm_ioapic_init 进行初始化：调用 kvm_iodevice_init 绑定操作：
+After receiving KVM_CREATE_IRQCHIP from QEMU, call kvm_ioapic_init to initialize: call kvm_iodevice_init to bind operation:
 
 ```c
 static const struct kvm_io_device_ops ioapic_mmio_ops = {
@@ -280,16 +282,16 @@ static const struct kvm_io_device_ops ioapic_mmio_ops = {
 };
 ```
 
-并通过 kvm_io_bus_register_dev 将 dev 注册到MMIO总线(KVM_MMIO_BUS)上。
+And register dev to the MMIO bus (KVM_MMIO_BUS) through kvm_io_bus_register_dev.
 
 #### LAPIC
 
-在KVM中，每个vCPU都有自己的LAPIC，名为 kvm_lapic 。它的指针被保存在 vcpu.arch.apic 中。
+In KVM, each vCPU has its own LAPIC called kvm_lapic. Its pointer is stored in vcpu.arch.apic.
 
 ```c
 struct kvm_lapic {
-    unsigned long base_address;                 // 基地址(GPA)
-    struct kvm_io_device dev;                   // 保存了LAPIC对应的操作
+    unsigned long base_address; // Base address (GPA)
+    struct kvm_io_device dev; // Save the operation corresponding to LAPIC
     struct kvm_timer lapic_timer;
     u32 divide_count;
     struct kvm_vcpu *vcpu;
@@ -305,7 +307,7 @@ struct kvm_lapic {
      * the guest 1:1, because it is accessed by the vmx microcode.
      * Note: Only one register, the TPR, is used by the microcode.
      */
-    void *regs;                                 // 指向host的一个page，保存了LAPIC使用的所有虚拟寄存器，如IRR，ISR，LVT等
+    void *regs; // Point to a page of host, save all virtual registers used by LAPIC, such as IRR, ISR, LVT, etc.
     gpa_t vapic_addr;
     struct gfn_to_hva_cache vapic_cache;
     unsigned long pending_events;
@@ -313,9 +315,9 @@ struct kvm_lapic {
 };
 ```
 
-它在 vmx_create_vcpu => kvm_vcpu_init => kvm_arch_vcpu_init => kvm_create_lapic 中被创建和初始化。
+It is created and initialized in vmx_create_vcpu => kvm_vcpu_init => kvm_arch_vcpu_init => kvm_create_lapic.
 
-当需要对设备进行MMIO读写时，会调用到以下函数：
+When you need to read and write MMIO to the device, the following functions are called:
 
 ```c
 static const struct kvm_io_device_ops apic_mmio_ops = {
@@ -324,32 +326,32 @@ static const struct kvm_io_device_ops apic_mmio_ops = {
 };
 ```
 
-在读/写LAPIC的某个寄存器时，由于设置了 VMCS - Secondary Processor-Based VM-Execution Controls - virtualize APIC accesses 位为1，产生VMEXIT，回到KVM，将寄存器地址减去 base_address 得到offset，然后通过 kvm_lapic_reg_read / kvm_lapic_reg_write 对 LAPIC 这个struct进行操作。
+When reading/writing a certain register of LAPIC, because the VMCS-Secondary Processor-Based VM-Execution Controls-virtualize APIC accesses bit is set to 1, VMEXIT is generated, and back to KVM, the register address is subtracted from base_address to get the offset, and then through kvm_lapic_reg_read / kvm_lapic_reg_write operates the LAPIC struct.
 
 
 
 
 
-#### 创建流程
+#### Create a process
 
-QEMU在 kvm_init 中，如果是on或split，说明需要KVM来模拟中断芯片，因此进行初始化， on 的调用流程如下：
+QEMU in kvm_init, if it is on or split, it means that KVM is needed to simulate the interrupt chip, so for initialization, the calling process of on is as follows:
 
 ```
 kvm_irqchip_create => kvm_arch_irqchip_create => kvm_vm_enable_cap(s, KVM_CAP_SPLIT_IRQCHIP, 0, 24) => kvm_vm_ioctl(s, KVM_ENABLE_CAP, &cap)
                    => kvm_vm_ioctl(s, KVM_CREATE_IRQCHIP)
 ```
 
-因此这里的关键是通过 KVM_CREATE_IRQCHIP 创建芯片。
+So the key here is to create the chip through KVM_CREATE_IRQCHIP.
 
-在 KVM 中，调用链如下：
+In KVM, the call chain is as follows:
 
 ```
-kvm_arch_vm_ioctl => kvm_create_pic                                           创建PIC芯片
-                  => kvm_ioapic_init                                          创建并初始化IOAPIC芯片
-                  => kvm_setup_default_irq_routing => kvm_set_irq_routing     设置中断路由
+kvm_arch_vm_ioctl => kvm_create_pic Create PIC chip
+                  => kvm_ioapic_init creates and initializes the IOAPIC chip
+                  => kvm_setup_default_irq_routing => kvm_set_irq_routing set interrupt routing
 ```
 
-在 on 下，KVM将直接以 default_routing 作为中断路由。即由KVM来初始化中断路由表 kvm->irq_routing 。
+Under on, KVM will directly use default_routing as the interrupt route. That is, KVM initializes the interrupt routing table kvm->irq_routing.
 
 
 ```c
@@ -374,15 +376,15 @@ static const struct kvm_irq_routing_entry default_routing[] = {
 #define ROUTING_ENTRY1(irq) IOAPIC_ROUTING_ENTRY(irq)
 
 #define PIC_ROUTING_ENTRY(irq) \
-  { .gsi = irq, .type = KVM_IRQ_ROUTING_IRQCHIP,  \
-    .u.irqchip = { .irqchip = SELECT_PIC(irq), .pin = (irq) % 8 } }
+  {.gsi = race, .type = KVM_IRQ_ROUTING_IRQCHIP, \
+    .u.irqchip = {.irqchip = SELECT_PIC (race), .pin = (race)% 8}}
 
 #define IOAPIC_ROUTING_ENTRY(irq) \
-  { .gsi = irq, .type = KVM_IRQ_ROUTING_IRQCHIP,  \
-    .u.irqchip = { .irqchip = KVM_IRQCHIP_IOAPIC, .pin = (irq) } }
+  {.gsi = race, .type = KVM_IRQ_ROUTING_IRQCHIP, \
+    .u.irqchip = {.irqchip = KVM_IRQCHIP_IOAPIC, .pin = (race)}}
 ```
 
-可以看到GSI的前16号(0-15)即有PIC又有IOAPIC。而16-23就只有IOAPIC了。
+It can be seen that the first 16 numbers (0-15) of GSI have both PIC and IOAPIC. And 16-23 is only IOAPIC.
 
 ##### kvm_set_irq_routing
 
@@ -391,30 +393,30 @@ kvm_set_irq_routing => setup_routing_entry => kvm_set_routing_entry
                     => rcu_assign_pointer(kvm->irq_routing, new)
 ```
 
-它会创建新的 kvm_irq_routing_table ，然后遍历新传入的entrys数组，对每一个entry一一调用 setup_routing_entry ，构造出 kvm_irq_routing_entry 并设置到新table中。最后将 kvm->irq_routing 指向新的table
+It will create a new kvm_irq_routing_table, then traverse the newly passed entries array, call setup_routing_entry for each entry one by one, construct kvm_irq_routing_entry and set it to the new table. Finally, point kvm->irq_routing to the new table
 
-中断路由表 kvm->irq_routing 的类型为 kvm_irq_routing_table 。表项存储在 map 中，在这里是 kvm_irq_routing_entry 组成的列表：
+The type of interrupt routing table kvm->irq_routing is kvm_irq_routing_table. The entries are stored in the map, here is a list of kvm_irq_routing_entry:
 
 ```c
 struct kvm_irq_routing_table {
-    int chip[KVM_NR_IRQCHIPS][KVM_IRQCHIP_NUM_PINS];            // 一级索引指对应的中断芯片，二级索引对应引脚，存放引脚对应的GSI号。目前已弃用
+    int chip[KVM_NR_IRQCHIPS][KVM_IRQCHIP_NUM_PINS]; // The primary index refers to the corresponding interrupt chip, the secondary index corresponds to the pin, and the GSI number corresponding to the pin is stored. Currently deprecated
     u32 nr_rt_entries;
     /*
      * Array indexed by gsi. Each entry contains list of irq chips
      * the gsi is connected to.
      */
-    struct hlist_head map[0];                                   // 指向项为list的哈希表，key为gsi，value为kvm_kernel_irq_routing_entry列表
+    struct hlist_head map[0]; // Point to the hash table of list, key is gsi, value is kvm_kernel_irq_routing_entry list
 };
 
 struct kvm_kernel_irq_routing_entry {
-    u32 gsi;                                                    // 引脚的GSI号
+    u32 gsi; // GSI number of the pin
     u32 type;
-    int (*set)(struct kvm_kernel_irq_routing_entry *e,          // 设置中断函数
-           struct kvm *kvm, int irq_source_id, int level,       // kvm，中断资源ID，高低电平
+    int (*set)(struct kvm_kernel_irq_routing_entry *e, // set interrupt function
+           struct kvm *kvm, int irq_source_id, int level, // kvm, interrupt resource ID, high and low level
            bool line_status);
     union {
         struct {
-            unsigned irqchip;
+            unsigned race;
             unsigned pin;
         } irqchip;
         struct {
@@ -431,11 +433,11 @@ struct kvm_kernel_irq_routing_entry {
 };
 ```
 
-具体的中断芯片(如PIC、IOAPIC)通过实现 kvm_irq_routing_entry 的 set 函数，实现了在中断注入时的对应行为。
+Specific interrupt chips (such as PIC, IOAPIC) realize the corresponding behavior during interrupt injection by implementing the set function of kvm_irq_routing_entry.
 
 ##### setup_routing_entry
 
-函数 setup_routing_entry 负责设置某个gsi的中断路由：
+The function setup_routing_entry is responsible for setting up the interrupt routing of a gsi:
 
 ```c
 static int setup_routing_entry(struct kvm *kvm,
@@ -453,7 +455,7 @@ static int setup_routing_entry(struct kvm *kvm,
     hlist_for_each_entry(ei, &rt->map[ue->gsi], link)
         if (ei->type != KVM_IRQ_ROUTING_IRQCHIP ||
             ue->type != KVM_IRQ_ROUTING_IRQCHIP ||
-            ue->u.irqchip.irqchip == ei->irqchip.irqchip)
+            ue-> u.irqchip.irqchip == ei-> irqchip.irqchip)
             return r;
 
     e->gsi = ue->gsi;
@@ -462,7 +464,7 @@ static int setup_routing_entry(struct kvm *kvm,
     if (r)
         goto out;
     if (e->type == KVM_IRQ_ROUTING_IRQCHIP)
-        rt->chip[e->irqchip.irqchip][e->irqchip.pin] = e->gsi;
+        rt-> chip [e-> irqchip.irqchip] [e-> irqchip.pin] = e-> gsi;
 
     hlist_add_head(&e->link, &rt->map[e->gsi]);
     r = 0;
@@ -471,9 +473,9 @@ out:
 }
 ```
 
-这里遍历了 kvm_irq_routing_table->map 中gsi对应的列表，如果发现其中存在目标irqchip的 kvm_kernel_irq_routing_entry ，表示已设置，则直接返回。因为一个中断控制器中所有引脚对应的GSI都应该不同。
+Here traverse the list corresponding to gsi in kvm_irq_routing_table->map, if it is found that there is kvm_kernel_irq_routing_entry of the target irqchip, it means that it has been set, then return directly. Because the GSI corresponding to all pins in an interrupt controller should be different.
 
-否则对该entry进行设置，在填充了 gsi 和 type 后通过 kvm_set_routing_entry 进一步设置。
+Otherwise, set the entry and further set it through kvm_set_routing_entry after filling gsi and type.
 
 ```c
 
@@ -488,7 +490,7 @@ int kvm_set_routing_entry(struct kvm *kvm,
     switch (ue->type) {
     case KVM_IRQ_ROUTING_IRQCHIP:
         delta = 0;
-        switch (ue->u.irqchip.irqchip) {
+        switch (ue-> u.irqchip.irqchip) {
         case KVM_IRQCHIP_PIC_MASTER:
             e->set = kvm_set_pic_irq;
             max_pin = PIC_NUM_PINS;
@@ -505,8 +507,8 @@ int kvm_set_routing_entry(struct kvm *kvm,
         default:
             goto out;
         }
-        e->irqchip.irqchip = ue->u.irqchip.irqchip;
-        e->irqchip.pin = ue->u.irqchip.pin + delta;
+        e-> irqchip.irqchip = ue-> u.irqchip.irqchip;
+        e-> irqchip.pin = ue-> u.irqchip.pin + delta;
         if (e->irqchip.pin >= max_pin)
             goto out;
         break;
@@ -521,8 +523,8 @@ int kvm_set_routing_entry(struct kvm *kvm,
         break;
     case KVM_IRQ_ROUTING_HV_SINT:
         e->set = kvm_hv_set_sint;
-        e->hv_sint.vcpu = ue->u.hv_sint.vcpu;
-        e->hv_sint.sint = ue->u.hv_sint.sint;
+        e-> hv_sint.vcpu = ue-> u.hv_sint.vcpu;
+        e-> hv_sint.sint = ue-> u.hv_sint.sint;
         break;
     default:
         goto out;
@@ -534,21 +536,21 @@ out:
 }
 ```
 
-这里就设置了上文所诉 kvm_kernel_irq_routing_entry 结构的 set 函数。对于普通中断(KVM_IRQ_ROUTING_IRQCHIP)，会根据不同的中断控制器(irqchip)设置不同的set函数：
+Here is the set function of the kvm_kernel_irq_routing_entry structure described above. For ordinary interrupts (KVM_IRQ_ROUTING_IRQCHIP), different set functions will be set according to different interrupt controllers (irqchip):
 
-* 对于PIC，由于type为 KVM_IRQ_ROUTING_IRQCHIP ，因此 set为 kvm_set_pic_irq
-* 对于IOAPIC，由于type为 KVM_IRQCHIP_PIC_MASTER / KVM_IRQCHIP_PIC_SLAVE ，因此 set为 kvm_set_ioapic_irq
+* For PIC, since type is KVM_IRQ_ROUTING_IRQCHIP, set is kvm_set_pic_irq
+* For IOAPIC, since the type is KVM_IRQCHIP_PIC_MASTER / KVM_IRQCHIP_PIC_SLAVE, the set is kvm_set_ioapic_irq
 
-至此KVM中的中断路由初始化完毕。
-
-
+So far, the interrupt routing in KVM is initialized.
 
 
 
-### 中断注入
-如果设备是在QEMU中模拟的，则产生中断时需要进行中断注入。
 
-在QEMU对KVM加速器进行初始化的函数 kvm_init 中，有：
+
+### Interrupt injection
+If the device is simulated in QEMU, interrupt injection is required when an interrupt is generated.
+
+In the function kvm_init that QEMU initializes the KVM accelerator, there are:
 
 ```c
     s->irq_set_ioctl = KVM_IRQ_LINE;
@@ -560,9 +562,9 @@ out:
 #define KVM_IRQ_LINE_STATUS       _IOWR(KVMIO, 0x67, struct kvm_irq_level)
 ```
 
-如果KVM支持返回注入的结果，则设置 s->irq_set_ioctl = KVM_IRQ_LINE_STATUS ，否则为 KVM_IRQ_LINE
+If KVM supports returning the injected result, set s->irq_set_ioctl = KVM_IRQ_LINE_STATUS, otherwise it is KVM_IRQ_LINE
 
-于是QEMU会在 kvm_set_irq 中通过ioctl向KVM注入中断：
+So QEMU will inject interrupts to KVM through ioctl in kvm_set_irq:
 
 ```c
 int kvm_set_irq(KVMState *s, int irq, int level)
@@ -584,7 +586,7 @@ int kvm_set_irq(KVMState *s, int irq, int level)
 }
 ```
 
-在 KVM 中调用链为 kvm_vm_ioctl => kvm_vm_ioctl_irq_line => kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID, irq_event->irq, irq_event->level, line_status)
+The call chain in KVM is kvm_vm_ioctl => kvm_vm_ioctl_irq_line => kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID, irq_event->irq, irq_event->level, line_status)
 
 
 ```c
@@ -597,7 +599,7 @@ int kvm_set_irq(KVMState *s, int irq, int level)
 int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
         bool line_status)
 {
-    struct kvm_kernel_irq_routing_entry irq_set[KVM_NR_IRQCHIPS];
+    struct kvm_kernel_irq_routing_entry irq_set [KVM_NR_IRQCHIPS];
     int ret = -1, i, idx;
 
     trace_kvm_set_irq(irq, level, irq_source_id);
@@ -607,11 +609,11 @@ int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
      * writes to the unused one.
      */
     idx = srcu_read_lock(&kvm->irq_srcu);
-    // 查询 kvm->irq_routing ，将对应中断号(pin?)的 kvm_kernel_irq_routing_entry 一一取出，设置到 irq_set 返回
+    // Query kvm->irq_routing, take out the kvm_kernel_irq_routing_entry corresponding to the interrupt number (pin?) one by one and set it to irq_set return
     i = kvm_irq_map_gsi(kvm, irq_set, irq);
     srcu_read_unlock(&kvm->irq_srcu, idx);
 
-    // 调用kvm_kernel_irq_routing_entry的set函数设置中断，如果芯片没实现，则set为空
+    // Call the set function of kvm_kernel_irq_routing_entry to set the interrupt, if the chip is not implemented, the set is empty
     while (i--) {
         int r;
         r = irq_set[i].set(&irq_set[i], kvm, irq_source_id, level,
@@ -619,29 +621,29 @@ int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
         if (r < 0)
             continue;
 
-        ret = r + ((ret < 0) ? 0 : ret);
+        ret = r + ((ret <0)? 0: ret);
     }
 
     return ret;
 }
 ```
 
-其中 irq_source_id 为中断源设备id， irq 为原始中断请求号(未转换成gsi)， level 表示中断的高低电平。
+Among them, irq_source_id is the id of the interrupt source device, irq is the original interrupt request number (not converted to gsi), and level represents the high and low levels of the interrupt.
 
-这里从中断路由表中找到对应的 entry ，调用中断路由初始化时设置的set函数。前面提到过：
+Here, find the corresponding entry from the interrupt routing table, and call the set function set when the interrupt routing is initialized. As mentioned earlier:
 
-* 对于PIC，set为 kvm_set_pic_irq
-* 对于IOAPIC，set为 kvm_set_ioapic_irq
+* For PIC, set is kvm_set_pic_irq
+* For IOAPIC, set is kvm_set_ioapic_irq
 
 #### kvm_set_pic_irq
 
 ```
-kvm_set_pic_irq => pic_irqchip                                              找到对应的中断芯片
-                => kvm_pic_set_irq => pic_set_irq1                          设置irq对应的pin，设置irr(interrupt request register)
-                                   => pic_update_irq => pic_irq_request     发送中断请求
+kvm_set_pic_irq => pic_irqchip find the corresponding interrupt chip
+                => kvm_pic_set_irq => pic_set_irq1 Set the pin corresponding to irq, set irr (interrupt request register)
+                                   => pic_update_irq => pic_irq_request Send interrupt request
 ```
 
-其中：
+among them:
 
 ```c
 static void pic_irq_request(struct kvm *kvm, int level)
@@ -654,7 +656,7 @@ static void pic_irq_request(struct kvm *kvm, int level)
 }
 ```
 
-负责设置中断芯片 kvm_pic 中的 output 为对应电平。同时如果原来 output 为0，则设置 wakeup_needed 为true，于是在 pic_unlock 中会调用 `kvm_make_request(KVM_REQ_EVENT, found)` 设置请求然后通过 kvm_vcpu_kick 让目标vCPU退出来处理请求。
+Responsible for setting the output in the interrupt chip kvm_pic to the corresponding level. At the same time, if the original output is 0, set wakeup_needed to true, so in pic_unlock, `kvm_make_request(KVM_REQ_EVENT, found)` will be called to set the request, and then the target vCPU will exit through kvm_vcpu_kick to process the request.
 
 
 #### kvm_set_ioapic_irq
@@ -663,11 +665,11 @@ kvm_set_ioapic_irq => kvm_ioapic_set_irq => ioapic_set_irq => ioapic_service
 
 ```
 ioapic_service
-=> 创建并初始化中断消息 kvm_lapic_irq
-=> kvm_irq_delivery_to_apic                 将中断消息发送到LAPIC
+=> Create and initialize the interrupt message kvm_lapic_irq
+=> kvm_irq_delivery_to_apic sends interrupt message to LAPIC
 ```
 
-kvm_lapic_irq 为 IOAPIC格式化后的中断消息，定义如下：
+kvm_lapic_irq is the interrupt message formatted by IOAPIC, defined as follows:
 
 ```c
 struct kvm_lapic_irq {
@@ -682,11 +684,11 @@ struct kvm_lapic_irq {
 };
 ```
 
-将消息 kvm_lapic_irq 作为参数，调用 kvm_irq_delivery_to_apic
+Call kvm_irq_delivery_to_apic with the message kvm_lapic_irq as a parameter
 
 ```c
 int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src,
-        struct kvm_lapic_irq *irq, struct dest_map *dest_map)
+        struct kvm_lapic_irq * irq, struct dest_map * dest_map)
 {
     int i, r = -1;
     struct kvm_vcpu *vcpu, *lowest = NULL;
@@ -709,7 +711,7 @@ int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src,
             continue;
 
         if (!kvm_apic_match_dest(vcpu, src, irq->shorthand,
-                    irq->dest_id, irq->dest_mode))
+                    irq-> dest_id, irq-> dest_mode))
             continue;
 
         if (!kvm_lowest_prio_delivery(irq)) {
@@ -724,7 +726,7 @@ int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src,
                     lowest = vcpu;
             } else {
                 __set_bit(i, dest_vcpu_bitmap);
-                dest_vcpus++;
+                dest_vcpus ++;
             }
         }
     }
@@ -743,9 +745,9 @@ int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src,
 }
 ```
 
-该函数除了可以处理外部中断(ioapic => lapic)，还可以处理IPI(lapic => lapic, 见 apic_send_ipi)。
+In addition to handling external interrupts (ioapic => lapic), this function can also handle IPI (lapic => lapic, see apic_send_ipi).
 
-它首先尝试从 kvm.arch.apic_map 中找到目标LAPIC。 kvm.arch.apic_map 定义如下：
+It first tries to find the target LAPIC from kvm.arch.apic_map. kvm.arch.apic_map is defined as follows:
 
 ```c
 struct kvm_apic_map {
@@ -756,23 +758,23 @@ struct kvm_apic_map {
         struct kvm_lapic *xapic_flat_map[8];
         struct kvm_lapic *xapic_cluster_map[16][4];
     };
-    struct kvm_lapic *phys_map[];               // 维护了LAPIC ID到 kvm_lapic 指针的映射
+    struct kvm_lapic *phys_map[]; // Maintain the mapping from LAPIC ID to kvm_lapic pointer
 };
 ```
 
-于是 kvm_irq_delivery_to_apic_fast => kvm_apic_map_get_dest_lapic 中，对于不是广播和最低优先级的中断，可以直接根据 irq->dest_id 从 phys_map 中取出对应的 kvm_lapic 。然后直接 kvm_apic_set_irq 对目标vCPU设置中断。否则需要遍历所有的vCPU，逐一的和RTE的 irq->dest_id 进行匹配。对匹配的vcpu调用 kvm_apic_set_irq 。
+So kvm_irq_delivery_to_apic_fast => kvm_apic_map_get_dest_lapic, for interrupts that are not broadcast and the lowest priority, you can directly retrieve the corresponding kvm_lapic from phys_map according to irq->dest_id. Then kvm_apic_set_irq directly sets an interrupt to the target vCPU. Otherwise, it is necessary to traverse all vCPUs and match the irq->dest_id of RTE one by one. Call kvm_apic_set_irq on the matching vcpu.
 
 
-kvm_apic_set_irq 实现为该vcpu的lapic设置中断：
+kvm_apic_set_irq is implemented as the lapic setting interrupt of the vcpu:
 
 ```
 => __apic_accept_irq
-    => 根据 delivery_mode 进行对应设置，如 APIC_DM_FIXED 为 kvm_lapic_set_vector + kvm_lapic_set_irr
+    => Set corresponding settings according to delivery_mode, for example, APIC_DM_FIXED is kvm_lapic_set_vector + kvm_lapic_set_irr
     => kvm_make_request(event, vcpu) ，event 可取 KVM_REQ_EVENT / KVM_REQ_SMI / KVM_REQ_NMI
-    => kvm_vcpu_kick(vcpu)              让目标vCPU退出来处理请求
+    => kvm_vcpu_kick(vcpu) Let the target vCPU exit to process the request
 ```
 
-kvm_make_request 本质上是设置 vcpu->requests 中请求对应的bit ，在下次 vcpu_enter_guest 时会对请求进行处理。
+Kvm_make_request essentially sets the bit corresponding to the request in vcpu->requests, and the request will be processed next time vcpu_enter_guest.
 
 
 
@@ -780,18 +782,18 @@ kvm_make_request 本质上是设置 vcpu->requests 中请求对应的bit ，在�
 
 kvm_vcpu_kick => smp_send_reschedule (native_smp_send_reschedule) => apic->send_IPI(cpu, RESCHEDULE_VECTOR) (x2apic_send_IPI)
 
-向目标vcpu产生一个中断，让其重新被调度，由于在VMCS中设置了外部中断会发生 VMExit，因此返回到 KVM ，从而能够实现在其重新 VMENTRY (vcpu_enter_guest) 之前注入中断
+Generate an interrupt to the target vcpu and let it be rescheduled. Because an external interrupt is set in VMCS, VMExit will occur, so it returns to KVM, so that it can inject interrupts before re-VMENTRY (vcpu_enter_guest)
 
-于是 kvm_x86_ops->run (vmx_vcpu_run) 返回到 vcpu_enter_guest 再到 vcpu_run 进入下一轮循环，于是又调用 vcpu_enter_guest ：
+So kvm_x86_ops->run (vmx_vcpu_run) returns to vcpu_enter_guest and then to vcpu_run to enter the next cycle, so vcpu_enter_guest is called again:
 
 ```
-vcpu_enter_guest => inject_pending_event        run前检查请求，如果kvm_check_request(KVM_REQ_EVENT, vcpu)，在运行vcpu前进行中断注入
+vcpu_enter_guest => inject_pending_event run before checking the request, if kvm_check_request(KVM_REQ_EVENT, vcpu), interrupt injection before running vcpu
                  => kvm_x86_ops->run            VMLAUNCH/VMRESUME
                  => vmx->idt_vectoring_info = vmcs_read32(IDT_VECTORING_INFO_FIELD)
-                 => vmx_complete_interrupts => __vmx_complete_interrupts    根据中断信息更新vcpu，该入队的入队
+                 => vmx_complete_interrupts => __vmx_complete_interrupts Update the vcpu according to the interrupt information, the enlisted team
 ```
 
-具体流程是：
+The specific process is:
 
 ```c
     if (kvm_check_request(KVM_REQ_EVENT, vcpu) || req_int_win) {
@@ -800,7 +802,7 @@ vcpu_enter_guest => inject_pending_event        run前检查请求，如果kvm_c
             r = 1;
             goto out;
         }
-        // 中断注入
+        // interrupt injection
         if (inject_pending_event(vcpu, req_int_win) != 0)
             req_immediate_exit = true;
         else {
@@ -828,52 +830,50 @@ vcpu_enter_guest => inject_pending_event        run前检查请求，如果kvm_c
     }
 ```
 
-发现有 KVM_REQ_EVENT ，于是调用 inject_pending_event
+KVM_REQ_EVENT is found, so call inject_pending_event
 
 ```
-=> 如果有 pending的异常 ，调用 kvm_x86_ops->queue_exception (vmx_queue_exception) 重新排队
-=> 如果 nmi_injected ，调用 kvm_x86_ops->set_nmi (vmx_inject_nmi)
-=> 如果有 pending的中断 ，调用 kvm_x86_ops->set_irq (vmx_inject_irq)
-=> 如果有 pending的不可屏蔽中断 ，调用 kvm_x86_ops->set_nmi (vmx_inject_nmi)
-=> kvm_cpu_has_injectable_intr                                                          如果vCPU有可注入的中断
-=> kvm_queue_interrupt(vcpu, kvm_cpu_get_interrupt(vcpu), false)                        将最高优先级的中断设置到 vcpu->arch.interrupt 中
-=> kvm_x86_ops->set_irq (vmx_inject_irq)                                                将中断信息写入VMCS
-    => vmcs_write32(VM_ENTRY_INSTRUCTION_LEN, vmx->vcpu.arch.event_exit_inst_len)       对于软中断，需要写指令长度
-    => vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, intr)                                     更新中断信息区域
+=> If there is pending exception, call kvm_x86_ops->queue_exception (vmx_queue_exception) to queue again
+=> If nmi_injected, call kvm_x86_ops->set_nmi (vmx_inject_nmi)
+=> If there is a pending interrupt, call kvm_x86_ops->set_irq (vmx_inject_irq)
+=> If there is pending non-maskable interrupt, call kvm_x86_ops->set_nmi (vmx_inject_nmi)
+=> kvm_cpu_has_injectable_intr if vCPU has injectable interrupt
+=> kvm_queue_interrupt(vcpu, kvm_cpu_get_interrupt(vcpu), false) Set the highest priority interrupt to vcpu->arch.interrupt
+=> kvm_x86_ops->set_irq (vmx_inject_irq) Write interrupt information to VMCS
+    => vmcs_write32(VM_ENTRY_INSTRUCTION_LEN, vmx->vcpu.arch.event_exit_inst_len) For soft interrupt, you need to write instruction length
+    => vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, intr) Update interrupt information area
 ```
 
 ##### kvm_cpu_has_injectable_intr
-用于判断是否有可注入的中断。
+Used to judge whether there is an interrupt that can be injected.
 
-=> lapic_in_kernel                      如果 LAPIC 不在KVM中，表示由QEMU负责模拟，于是 vcpu.arch.interrupt 早已被设置好，返回 interrupt.pending
-=> kvm_cpu_has_extint                   如果有pending的外部(非non-APIC)中断，返回 true
-=> kvm_vcpu_apicv_active                如果启用了virtual interrupt delivery，则APIC的中断会由硬件处理，无需软件干涉，返回 false
-=> kvm_apic_has_interrupt               如果 LAPIC 在KVM中，找到优先级最高的中断号，如果其大于PPR，返回 true
-    => apic_update_ppr                                                    更新PPR
-    => apic_find_highest_irr => apic_search_irr => find_highest_vector    从IRR中找到优先级最高的中断号
-    => 如果该中断号小于等于PPR，则返回-1
+=> lapic_in_kernel If LAPIC is not in KVM, it means that QEMU is responsible for the simulation, so vcpu.arch.interrupt has already been set, return interrupt.pending
+=> kvm_cpu_has_extint If there is pending external (non-APIC) interrupt, return true
+=> kvm_vcpu_apicv_active If virtual interrupt delivery is enabled, the APIC interrupt will be handled by hardware without software intervention, return false
+=> kvm_apic_has_interrupt If LAPIC is in KVM, find the interrupt number with the highest priority, if it is greater than PPR, return true
+    => apic_update_ppr update PPR
+    => apic_find_highest_irr => apic_search_irr => find_highest_vector Find the highest priority interrupt number from IRR
+    => If the interrupt number is less than or equal to PPR, return -1
 
 
-#### 小结
+#### Summary
 
-在重新 run 前，判断是否有中断请求，如果有，则检查LAPIC的中断队列，找到优先级最高的中断，如果其中断向量号大于PPR(Processor Priority Register)，则需要进行注入。
+Before re-run, judge whether there is an interrupt request. If so, check the interrupt queue of LAPIC to find the interrupt with the highest priority. If the interrupt vector number is greater than the PPR (Processor Priority Register), injection is required.
 
-于是设置 vcpu->arch.interrupt (kvm_queued_interrupt)，其中 pending 设置为true
+So set vcpu->arch.interrupt (kvm_queued_interrupt), where pending is set to true
 
 ```c
 struct kvm_queued_interrupt {
     bool pending;
-    bool soft;      // 是否软中断
-    u8 nr;          // 中断向量号
+    bool soft; // Whether to soft interrupt
+    u8 nr; // interrupt vector number
 } interrupt;
 ```
 
 
-在VMEXIT时，如果注入成功，会在 vmx_vcpu_run => vmx_complete_interrupts => __vmx_complete_interrupts => kvm_clear_interrupt_queue 将 pending 设置为 false。
+In VMEXIT, if the injection is successful, the pending will be set to false in vmx_vcpu_run => vmx_complete_interrupts => __vmx_complete_interrupts => kvm_clear_interrupt_queue.
 
-如果注入失败，会在 __vmx_complete_interrupts 调用 requeue ，重新进行注入。
-
-
+If the injection fails, requeue will be called in __vmx_complete_interrupts to re-inject.
 
 
 
@@ -881,8 +881,10 @@ struct kvm_queued_interrupt {
 
 
 
-### QEMU模拟芯片
-我们知道，QEMU中的设备都是通过 TypeInfo 定义，然后以 TypeImpl 进行注册。在创建设备时，调用 class_init 初始化类对象，然后调用 instance_init 初始化类实例对象，最后通过 realize 完成设备的构造。
+
+
+### QEMU analog chip
+We know that all devices in QEMU are defined by TypeInfo and then registered with TypeImpl. When creating a device, call class_init to initialize the class object, then call instance_init to initialize the class instance object, and finally complete the construction of the device by realizing.
 
 #### PIC
 
@@ -900,7 +902,7 @@ static const TypeInfo i8259_info = {
 };
 ```
 
-在 pc_q35_init 中，有以下一段代码：
+In pc_q35_init, there is the following piece of code:
 
 ```c
 i8259 = i8259_init(isa_bus, pc_allocate_cpu_irq());
@@ -909,21 +911,21 @@ for (i = 0; i < ISA_NUM_IRQS; i++) {
 }
 ```
 
-这里首先为 PIC 设备分配一个中断(parent_irq)，于是调用 pc_allocate_cpu_irq => qemu_allocate_irq(pic_irq_request, NULL, 0) ，创建了一个序号为0，handler为 pic_irq_request 的中断。作为上游中断。
+Here first allocate an interrupt (parent_irq) for the PIC device, then call pc_allocate_cpu_irq => qemu_allocate_irq(pic_irq_request, NULL, 0) to create an interrupt with a sequence number of 0 and a handler for pic_irq_request. As an upstream interrupt.
 
-然后初始化 PIC ：
+Then initialize PIC:
 
 ```c
 qemu_irq *i8259_init(ISABus *bus, qemu_irq parent_irq)
 {
     qemu_irq *irq_set;
     DeviceState *dev;
-    ISADevice *isadev;
+    ISADevice * isadev;
     int i;
 
     irq_set = g_new0(qemu_irq, ISA_NUM_IRQS);
 
-    // 创建PIC master device，挂到 isa_bus 上
+    // Create PIC master device and hang on isa_bus
     isadev = i8259_init_chip(TYPE_I8259, bus, true);
     dev = DEVICE(isadev);
 
@@ -933,7 +935,7 @@ qemu_irq *i8259_init(ISABus *bus, qemu_irq parent_irq)
     }
 
     isa_pic = dev;
-    // 创建PIC slave device，挂到 isa_bus 上
+    // Create PIC slave device and hang on isa_bus
     isadev = i8259_init_chip(TYPE_I8259, bus, false);
     dev = DEVICE(isadev);
 
@@ -948,7 +950,7 @@ qemu_irq *i8259_init(ISABus *bus, qemu_irq parent_irq)
 }
 ```
 
-其负责创建两个8259中断芯片的类实例对象。i8259_init_chip => qdev_init_nofail => ... => pic_realize
+It is responsible for creating two class instance objects of the 8259 interrupt chip. i8259_init_chip => qdev_init_nofail => ... => pic_realize
 
 ```c
 static void pic_realize(DeviceState *dev, Error **errp)
@@ -972,9 +974,9 @@ static void pic_realize(DeviceState *dev, Error **errp)
 
 ```
 => qdev_init_gpio_out_named(dev, pins, NULL, n)
-    => qdev_get_named_gpio_list         从设备实例(DeviceState)中取出gpio，遍历该链表找到对应名称的 NamedGPIOList ，如果找不到，创建一个，插到最前
-    => 如果未传入名称，设置name为 "unnamed-gpio-out"
-    => object_property_add_link         根据传入的 qemu_irq 数组和长度，将每个 qemu_irq *指针*以名称 "name[i]" 作为dev的link属性
+    => qdev_get_named_gpio_list Take out gpio from the device instance (DeviceState), traverse the linked list to find the NamedGPIOList of the corresponding name, if not found, create one, and insert it to the top
+    => If no name is passed in, set name to "unnamed-gpio-out"
+    => object_property_add_link uses the name "name[i]" as the link attribute of dev according to the qemu_irq array and length passed in.
     => NamedGPIOList.num_out +=n
 ```
 
@@ -982,33 +984,33 @@ static void pic_realize(DeviceState *dev, Error **errp)
 
 ```
 => qdev_init_gpio_in_named(dev, handler, NULL, n)
-    => qdev_get_named_gpio_list         从设备实例(DeviceState)中取出gpio，遍历该链表找到对应名称的 NamedGPIOList ，如果找不到，创建一个，插到最前
-    => NamedGPIOList.in = qemu_extend_irqs(gpio_list->in, gpio_list->num_in, handler, dev, n)  在原有基础上创建n个 qemu_irq ，handler为传入函数
-    => 如果未传入名称，设置name为 "unnamed-gpio-in"
-    => 根据传入的数目，将每个 qemu_irq 以名称 "name[i]" 作为dev的child属性
-    => NamedGPIOList.num_in 增加n
+    => qdev_get_named_gpio_list Take out gpio from the device instance (DeviceState), traverse the linked list to find the NamedGPIOList of the corresponding name, if not found, create one, and insert it to the top
+    => NamedGPIOList.in = qemu_extend_irqs(gpio_list->in, gpio_list->num_in, handler, dev, n) Create n qemu_irq on the original basis, the handler is the incoming function
+    => If no name is passed in, set name to "unnamed-gpio-in"
+    => According to the number passed in, each qemu_irq is named "name[i]" as the child attribute of dev
+    => NamedGPIOList.num_in increases by n
 ```
 
-于是每个 8259 会有1个out，8个in GPIO，存在名字为NULL的 DeviceState.gpios 链表中
+So each 8259 will have 1 out and 8 in GPIOs, stored in the DeviceState.gpios linked list named NULL
 
-其中out对应的"unnamed-gpio-out[0]"的值是一个 qemu_irq *指针*，指向 s->int_out ，存放的是该成员的地址，而其还没有设置。
-而in对应的"unnamed-gpio-in[i]"的值是一个 qemu_irq 。其handler为 pic_set_irq ，opaque为 dev
+The value of "unnamed-gpio-out[0]" corresponding to out is a qemu_irq *pointer*, pointing to s->int_out, which stores the address of the member, which has not been set.
+The value of "unnamed-gpio-in[i]" corresponding to in is a qemu_irq. Its handler is pic_set_irq, opaque is dev
 
 
-#### PIC 连接
+#### PIC connection
 
-在创建了8259中断芯片的类实例对象后， i8259_init 对主片(master)调用 qdev_connect_gpio_out 进行连接 ：
+After creating the class instance object of the 8259 interrupt chip, i8259_init calls qdev_connect_gpio_out to the master to connect:
 
 qdev_connect_gpio_out(dev, 0, parent_irq) => qdev_connect_gpio_out_named(dev, NULL, n, pin)  *<-pin就是parent_irq*
 
 ##### qdev_connect_gpio_out_named
 
 ```
-=> object_property_add_child    将上级中断(parent_irq) 以 "non-qdev-gpio[*]" 为名作为 "/machine/unattached" container 的child属性。
-=> object_property_set_link     设置dev名为 "name[i]" 的link属性值为 parent_irq 。该属性也就是前面的 qdev_init_gpio_out 中创建的 "name[i]" ，值指向 s->int_out ，于是 s->int_out 就被设置为了 parent_irq ，out的坑被填上了。
+=> object_property_add_child sets the parent interrupt (parent_irq) as the child property of the "/machine/unattached" container under the name "non-qdev-gpio[*]".
+=> object_property_set_link sets the link attribute value of the dev name "name[i]" to parent_irq. This attribute is the "name[i]" created in the previous qdev_init_gpio_out, and the value points to s->int_out, so s->int_out is set to parent_irq, and the pit of out is filled.
 ```
 
-如果上级中断已有路径，则 `child->parent != NULL`， object_property_add_child 返回。否则进行添加为 "/machine/unattached" container的child。这里有个细节是实际上它们的属性名不是"non-qdev-gpio[*]"， 因为在 object_property_add_child => object_property_add 中，会尝试从0开始替换掉`*`。比如这里的 parent_irq 被分到的属性名为 "non-qdev-gpio[24]" ，于是完整路径为 "/machine/unattached/non-qdev-gpio[24]" ，这点在 qom-tree 也有体现：
+If the parent interrupt has a path, `child->parent != NULL`, object_property_add_child returns. Otherwise, add it as a child of the "/machine/unattached" container. There is a detail here that in fact their property name is not "non-qdev-gpio[*]", because in object_property_add_child => object_property_add, it will try to replace `*` from 0. For example, the attribute name of parent_irq assigned here is "non-qdev-gpio[24]", so the full path is "/machine/unattached/non-qdev-gpio[24]", which is also reflected in qom-tree :
 
 ```
 /machine (pc-q35-2.8-machine)
@@ -1016,14 +1018,14 @@ qdev_connect_gpio_out(dev, 0, parent_irq) => qdev_connect_gpio_out_named(dev, NU
     /non-qdev-gpio[24] (irq)
 ```
 
-之所以要把上级中断(如 parent_irq )设置为 "/machine/unattached" container 的child属性，是因为在接下来的 object_property_set_link 中需要上级中断有自己的路径：
+The reason for setting the upper-level interrupt (such as parent_irq) to the child property of "/machine/unattached" container is because the upper-level interrupt needs to have its own path in the next object_property_set_link:
 
 ```c
 void object_property_set_link(Object *obj, Object *value,
                               const char *name, Error **errp)
 {
     if (value) {
-        // 取出上级中断的路径
+        // Take out the path of the superior interrupt
         gchar *path = object_get_canonical_path(value);
         object_property_set_str(obj, path, name, errp);
         g_free(path);
@@ -1035,11 +1037,11 @@ void object_property_set_link(Object *obj, Object *value,
 
 ##### qdev_get_gpio_in => qdev_get_gpio_in_named
 
-获取 qdev_init_gpio_in 中创建的存在 NamedGPIOList.in 中的8个 qemu_irq ，存到 irq_set 数组的 0-7 位置
+Get the 8 qemu_irqs created in qdev_init_gpio_in and stored in NamedGPIOList.in, and store them in positions 0-7 of the irq_set array
 
-从片(slave)也会通过类似的过程来初始化，只不过其上游端口不是parent_irq，而是主片的第三个qemu_irq，即 irq_set[2] ，模拟了硬件上从片 out 接到主片的 irq2 引脚的电路。最后获取 qdev_init_gpio_in 中创建的存在 NamedGPIOList.in 中的8个 qemu_irq ，存到 irq_set 数组的 8-15 位置。
+The slave will also be initialized through a similar process, but its upstream port is not parent_irq, but the third qemu_irq of the master, that is, irq_set[2], which simulates the hardware out of the slave to the master. Circuit of irq2 pin. Finally, get the 8 qemu_irqs created in qdev_init_gpio_in and stored in NamedGPIOList.in, and store them in positions 8-15 of the irq_set array.
 
-PIC初始化完成后，将 irq_set 返回，被存到 gsi_state->i8259_irq 。
+After PIC initialization is complete, irq_set is returned and stored in gsi_state->i8259_irq.
 
 
 
@@ -1047,7 +1049,7 @@ PIC初始化完成后，将 irq_set 返回，被存到 gsi_state->i8259_irq 。
 
 pc_new_cpu ==> apic_init(env,env->cpuid_apic_id) ==> qdev_create(NULL, "kvm-apic");
 
-根据 x86_cpu_realizefn => x86_cpu_apic_create => apic_get_class ，此时LAPIC不放在KVM中，由QEMU负责对其进行模拟，于是 apic_type = "apic" ：
+According to x86_cpu_realizefn => x86_cpu_apic_create => apic_get_class, LAPIC is not placed in KVM at this time, and QEMU is responsible for simulating it, so apic_type = "apic":
 
 ```c
 static const TypeInfo apic_common_type = {
@@ -1084,7 +1086,7 @@ static void apic_realize(DeviceState *dev, Error **errp)
 }
 ```
 
-可以看到它为MSI注册了对应的 MemoryRegion，当对该 MemoryRegion 进行操作时，执行以下操作：
+You can see that it has registered the corresponding MemoryRegion for MSI. When operating on the MemoryRegion, perform the following operations:
 
 ```c
 static const MemoryRegionOps apic_io_ops = {
@@ -1099,7 +1101,7 @@ static const MemoryRegionOps apic_io_ops = {
 
 #### IOAPIC
 
-定义如下：
+It is defined as follows:
 
 ```c
 static const TypeInfo ioapic_info = {
@@ -1110,7 +1112,7 @@ static const TypeInfo ioapic_info = {
 };
 ```
 
-如果开启了PIC， pc_q35_init 会调用 `ioapic_init_gsi(gsi_state, "q35");` 初始化IOAPIC：
+If PIC is enabled, pc_q35_init will call ʻioapic_init_gsi(gsi_state, "q35");` to initialize IOAPIC:
 
 ```c
 void ioapic_init_gsi(GSIState *gsi_state, const char *parent_name)
@@ -1138,7 +1140,7 @@ void ioapic_init_gsi(GSIState *gsi_state, const char *parent_name)
 }
 ```
 
-此时IOAPIC不放在KVM中，由QEMU负责对其进行模拟。 于是 qdev_init_nofail => ... => ioapic_realize
+At this time, IOAPIC is not placed in KVM, and QEMU is responsible for its simulation. So qdev_init_nofail => ... => ioapic_realize
 
 ```c
 static void ioapic_realize(DeviceState *dev, Error **errp)
@@ -1162,45 +1164,45 @@ static void ioapic_realize(DeviceState *dev, Error **errp)
 }
 ```
 
-同样是通过 qdev_init_gpio_in 创建in的 qemu_irq ，一共创建24个，handler为 ioapic_set_irq
+The same is the qemu_irq of in created by qdev_init_gpio_in, a total of 24 are created, and the handler is ioapic_set_irq
 
-IOAPIC被存到全局数组 ioapics 中，index也由全局变量 ioapic_no 来维护。
+IOAPIC is stored in the global array ioapics, and the index is also maintained by the global variable ioapic_no.
 
-于是IOAPIC会有24个in GPIO。区别于 PIC 将创建的 qemu_irq 返回并由 pc_q35_init 负责设置到 gsi_state 中，ioapic_init_gsi 直接传入 gsi_state 指针，在函数内对 gsi_state->ioapic_irq 进行设置。
+So IOAPIC will have 24 in GPIO. Different from the qemu_irq that PIC will create and return it to gsi_state by pc_q35_init, ioapic_init_gsi directly passes in the gsi_state pointer, and gsi_state->ioapic_irq is set in the function.
 
 #### GSI
 
-至此， gsi_state 中 i8259_irq 和 ioapic_irq 都被填充完毕。而实际上在初始化 PIC 和 IOAPIC 前， pc_q35_init 会创建 GSI 的 qemu_irq ：
+So far, i8259_irq and ioapic_irq in gsi_state have been filled. In fact, before initializing PIC and IOAPIC, pc_q35_init will create GSI qemu_irq:
 
 ```c
-    // 如果 ioapic 在kernel(KVM)中，即在开启kvm的情况下，指定参数 kernel-irqchip=on ，则
+    // If ioapic is in the kernel (KVM), that is, when kvm is turned on, specify the parameter kernel-irqchip=on, then
     if (kvm_ioapic_in_kernel()) {
-        kvm_pc_setup_irq_routing(pcmc->pci_enabled);                        // 创建中断路由，并设置到KVM
+        kvm_pc_setup_irq_routing(pcmc->pci_enabled); // Create an interrupt route and set it to KVM
         pcms->gsi = qemu_allocate_irqs(kvm_pc_gsi_handler, gsi_state,
                                        GSI_NUM_PINS);
     }
-    // 否则 (off / split时ioapic在QEMU中)
+    // Otherwise (ioapic is in QEMU when off/split)
     else {
         pcms->gsi = qemu_allocate_irqs(gsi_handler, gsi_state, GSI_NUM_PINS);
     }
 ```
 
-会创建 GSI_NUM_PINS(24) 个 qemu_irq ，编号从0-23，opaque指向 gsi_state ，handler 为 kvm_pc_gsi_handler (IOAPIC由KVM模拟时) / gsi_handler (IOAPIC由QEMU模拟时) ，保存到 PCMachineState.gsi 中。
+GSI_NUM_PINS(24) qemu_irqs will be created, numbered from 0-23, opaque points to gsi_state, handler is kvm_pc_gsi_handler (when IOAPIC is simulated by KVM) / gsi_handler (when IOAPIC is simulated by QEMU), and saved to PCMachineState.gsi.
 
-随后 pc_q35_init 会通过 pci_create_simple_multifunction 创建并初始化 ICH9-LPC ，调用其 realize 函数：
+Then pc_q35_init will create and initialize ICH9-LPC through pci_create_simple_multifunction and call its realize function:
 
 ```
 ich9_lpc_realize => isa_bus = isa_bus_new(...)                                              创建 ISABus
-                 => lpc->isa_bus = isa_bus                                                  将 ISABus 设置为 ICH9LPCState 的成员
-                 => qdev_init_gpio_out_named(dev, lpc->gsi, ICH9_GPIO_GSI, GSI_NUM_PINS)    创建 24 个out GPIO
-                 => isa_bus_irqs(isa_bus, lpc->gsi)                                         将 ISABus.irqs 设置为 ICH9LPCState.gsi
+                 => lpc->isa_bus = isa_bus sets ISABus as a member of ICH9LPCState
+                 => qdev_init_gpio_out_named(dev, lpc->gsi, ICH9_GPIO_GSI, GSI_NUM_PINS) Create 24 out GPIO
+                 => isa_bus_irqs(isa_bus, lpc->gsi) Set ISABus.irqs to ICH9LPCState.gsi
 ```
 
-通过 qdev_init_gpio_out_named 创建了24个out GPIO(qemu_irq)，存在设备父类 DeviceState 的 gpios 链表中，名为"gsi"。每个 qemu_irq *指针*以名称 "name[i]" 作为dev的link属性，指向 ICH9LPCState.gsi 数组成员的地址。
+Created 24 out GPIO (qemu_irq) through qdev_init_gpio_out_named, stored in the gpios linked list of the device parent DeviceState, named "gsi". Each qemu_irq *pointer* takes the name "name[i]" as the link attribute of dev and points to the address of the ICH9LPCState.gsi array member.
 
-接下来的 isa_bus_irqs 将 ISABus.irqs 设置为 ICH9LPCState.gsi 。也就是说， ISABus.irqs 指向了 ICH9-LPC out GPIO(qemu_irq) 所指向的值 。
+The following isa_bus_irqs sets ISABus.irqs to ICH9LPCState.gsi. In other words, ISABus.irqs points to the value pointed to by ICH9-LPC out GPIO(qemu_irq).
 
-接下来 pc_q35_init 会将 ICH9LPCState 刚创建的 out GPIO 一一连接到 pcms->gsi ：
+Next, pc_q35_init will connect the out GPIO just created by ICH9LPCState to pcms->gsi one by one:
 
 ```c
     for (i = 0; i < GSI_NUM_PINS; i++) {
@@ -1208,10 +1210,10 @@ ich9_lpc_realize => isa_bus = isa_bus_new(...)                                  
     }
 ```
 
-于是 ISABus.irqs 等同于 PCMachineState.gsi，即 ISABus.irqs[i] == PCMachineState.gsi[i] 。如图所示：
+So ISABus.irqs is equivalent to PCMachineState.gsi, that is, ISABus.irqs[i] == PCMachineState.gsi[i]. as the picture shows:
 
 ```
-PCMachineState.gsi  (gsi_handler)
+PCMachineState.gsi (gsi_handler)
 | | | | | | ... |
 0 1 2 3 4 5     23
 | | | | | | ... |  out
@@ -1222,7 +1224,7 @@ PCMachineState.gsi  (gsi_handler)
 ```
 
 
-可以用GDB进行验证：
+You can use GDB to verify:
 
 ```
 (gdb) p *isa_bus->irqs
@@ -1232,13 +1234,13 @@ $16 = (qemu_irq) 0x55555694f8c0
 ```
 
 
-#### 中断注入
+#### Interrupt injection
 
-不同于KVM模拟的中断芯片(IOAPIC)通过查找获取目标LAPIC然后直接设置其变量来传递中断，QEMU通过GPIO。
+Different from the interrupt chip (IOAPIC) simulated by KVM, the interrupt is transmitted by finding the target LAPIC and then directly setting its variables. QEMU uses GPIO.
 
-一般来说，产生中断的设备的 irq 成员都会设置为 PCMachineState.gsi 。以串口(isa-serial)为例，在其 realize 函数 serial_isa_realizefn 中，调用了 `isa_init_irq(isadev, &s->irq, isa->isairq)` ，设置设备对象(SerialState)的 irq 成员，其中 isa->isairq 通过 isa_serial_irq[isa->index] 得到， index 是 serial_isa_realizefn 中的静态变量，每调用一次加一。
+Generally speaking, the irq member of the device that generates the interrupt will be set to PCMachineState.gsi. Taking the serial port (isa-serial) as an example, in its realize function serial_isa_realizefn, ʻisa_init_irq(isadev, &s->irq, isa->isairq)` is called to set the irq member of the device object (SerialState), where isa-> isairq is obtained through isa_serial_irq[isa->index], index is a static variable in serial_isa_realizefn, which is incremented by one for each call.
 
-根据 isa_serial_irq 的定义，共有4个串口设备，对应的 isairq 分别为 4, 3, 4, 3 。对于 index 为 0 的串口设备，其 isairq 为 4，于是：
+According to the definition of isa_serial_irq, there are 4 serial devices in total, and the corresponding isairqs are 4, 3, 4, 3 respectively. For the serial device with index 0, its isairq is 4, so:
 
 ```c
 void isa_init_irq(ISADevice *dev, qemu_irq *p, int isairq)
@@ -1250,12 +1252,12 @@ void isa_init_irq(ISADevice *dev, qemu_irq *p, int isairq)
 }
 ```
 
-调用 isa_get_irq 从 isabus->irqs 中取出对应的 qemu_irq (isabus->irqs[4])，将其设置到串口设备的类实例对象，即 SerialState.irq 。
+Call isa_get_irq to fetch the corresponding qemu_irq (isabus->irqs[4]) from isabus->irqs, and set it to the class instance object of the serial device, namely SerialState.irq.
 
-前面提到，ISABus.irqs 等同于 PCMachineState.gsi 。于是串口设备的 irq 实际上指向了 GSI qemu_irq 。这相当于每个设备都对应到GSI上。GSI qemu_irq 的 handler 为 gsi_handler ，n指定了其在GSIState 数组中的序号。
+As mentioned earlier, ISABus.irqs is equivalent to PCMachineState.gsi. So the irq of the serial device actually points to the GSI qemu_irq. This is equivalent to each device corresponding to the GSI. The handler of GSI qemu_irq is gsi_handler, and n specifies its serial number in the GSIState array.
 
 ```
-PCMachineState.gsi  (gsi_handler)
+PCMachineState.gsi (gsi_handler)
           |
           4
           | irq
@@ -1265,17 +1267,17 @@ PCMachineState.gsi  (gsi_handler)
 ```
 
 
-继续中断注入的分析。设备在发送中断时会调用以下两个函数设置电平：
+Continue to interrupt the injection analysis. The device will call the following two functions to set the level when sending an interrupt:
 
-* qemu_irq_lower => qemu_set_irq(irq, 0)       设为低电平
-* qemu_irq_raise => qemu_set_irq(irq, 1)       设为高电平
+* qemu_irq_lower => qemu_set_irq(irq, 0) is set to low level
+* qemu_irq_raise => qemu_set_irq(irq, 1) is set to high level
 
 
 ##### qemu_set_irq
 
-=> irq->handler(irq->opaque, irq->n, level) 负责取出 qemu_irq 中的 handler 进行调用。
+=> irq->handler(irq->opaque, irq->n, level) is responsible for taking out the handler in qemu_irq to call.
 
-由于属于 GSIState ，因此调用的是 gsi_handler ：
+Because it belongs to GSIState, gsi_handler is called:
 
 ```c
 void gsi_handler(void *opaque, int n, int level)
@@ -1290,7 +1292,7 @@ void gsi_handler(void *opaque, int n, int level)
 }
 ```
 
-它根据序号(qemu_irq.n)，取出对应芯片的对应 qemu_irq 的 handler 进行调用。
+According to the sequence number (qemu_irq.n), it takes out the corresponding qemu_irq handler of the corresponding chip to call.
 
 #### PIC
 
@@ -1311,7 +1313,7 @@ parent_irq (pic_irq_request)
 0 1 2 3 4 5 6 7     (pic_set_irq)
 ```
 
-对于 PIC ，handler为 pic_set_irq ，属于PIC 的 in 。于是 pic_set_irq 设置PIC芯片(PICCommonState)的irr寄存器(变量)，然后调用 pic_update_irq ：
+For PIC, the handler is pic_set_irq, which belongs to in of PIC. So pic_set_irq sets the irr register (variable) of the PIC chip (PICCommonState), and then calls pic_update_irq:
 
 ```c
 static void pic_update_irq(PICCommonState *s)
@@ -1330,14 +1332,14 @@ static void pic_update_irq(PICCommonState *s)
 
 ```
 
-通过 pic_get_irq 获取 irr 中没被imr屏蔽掉的优先级最高的中断，如果有，则设置 out (s->int_out[0]) 为高电平，否则设置为低电平。于是
+Get the interrupt with the highest priority in irr that is not shielded by imr through pic_get_irq. If there is, set out (s->int_out[0]) to high level, otherwise set to low level. then
 
 ```
-qemu_set_irq => pic_irq_request => 如果CPU有LAPIC，调用 apic_deliver_pic_intr 设置到LAPIC
-                                => 否则根据电平调用 cpu_interrupt / cpu_reset_interrupt
+qemu_set_irq => pic_irq_request => If the CPU has LAPIC, call apic_deliver_pic_intr to set it to LAPIC
+                                => otherwise call cpu_interrupt / cpu_reset_interrupt according to the level
 ```
 
-这里有一个有趣的地方：在SMP中，PIC的中断应该发送给哪个CPU呢？QEMU的实现简单粗暴，根据 pic_irq_request ，其选择的是第一个CPU(first_cpu)。
+Here is an interesting point: In SMP, which CPU should the PIC interrupt be sent to? The implementation of QEMU is simple and rude. According to pic_irq_request, it selects the first CPU (first_cpu).
 
 #### IOAPIC
 
@@ -1349,7 +1351,7 @@ qemu_set_irq => pic_irq_request => 如果CPU有LAPIC，调用 apic_deliver_pic_i
 0 1 | 3 4 5     23  in (ioapic_set_irq)
 ```
 
-对于 IOAPIC ， handler 为 ioapic_set_irq ，属于 IOAPIC 的 in。
+For IOAPIC, the handler is ioapic_set_irq, which belongs to the in of IOAPIC.
 
 ```c
 static void ioapic_set_irq(void *opaque, int vector, int level)
@@ -1391,32 +1393,30 @@ static void ioapic_set_irq(void *opaque, int vector, int level)
 }
 ```
 
-首先，它从 IOAPIC 的 I/O REDIRECTION TABLE 中找到中断向量号所对应的 entry 寄存器。其中包含 Interrupt Mask、Trigger Mode 、Remote IRR 等bit。如果 Trigger Mode bit 为1，表示水平触发，0表示边缘触发。
+First, it finds the entry register corresponding to the interrupt vector number from the I/O REDIRECTION TABLE of IOAPIC. Including Interrupt Mask, Trigger Mode, Remote IRR and other bits. If the Trigger Mode bit is 1, it means horizontal trigger, and 0 means edge trigger.
 
-对于水平触发，在设置irr中对应的bit后，需要判断 Remote IRR bit ，如果为1，表示 LAPIC 已经收到 IOAPIC 发来的中断了，正在处理中；如果为0，表示 LAPIC 已经处理完中断，向 IOAPIC 发送 EOI 消息，表示可以继续接收中断。因此如果为0，则可以调用 ioapic_service 发送中断消息。
+For horizontal trigger, after setting the corresponding bit in irr, you need to judge the Remote IRR bit. If it is 1, it means that LAPIC has received the interrupt from IOAPIC and is being processed; if it is 0, it means that LAPIC has finished processing the interrupt. Send an EOI message to IOAPIC, indicating that it can continue to receive interrupts. So if it is 0, ioapic_service can be called to send an interrupt message.
 
-对于边缘触发，需要判断 Interrupt Mask bit ，如果为1，表示中断被屏蔽，无需设置irr；如果为0，表示可以发送中断，于是设置irr中对应的bit后，调用 ioapic_service 发送中断消息。
+For edge triggering, the Interrupt Mask bit needs to be judged. If it is 1, it means that the interrupt is masked and there is no need to set irr; if it is 0, it means that the interrupt can be sent, so after setting the corresponding bit in irr, call ioapic_service to send the interrupt message.
 
-ioapic_service 会遍历 IOAPIC 上的所有pin，如果 irr 在对应的bit为1，则需要发送中断：
+ioapic_service will traverse all pins on IOAPIC. If irr is 1 in the corresponding bit, an interrupt needs to be sent:
 
-若LAPIC在KVM中(kernel-irq=split)，则通过 kvm_set_irq 设置到KVM中，否则将其转换成 *MSI* 。根据定义，设备可以直接构造MSI消息，其中标明了中断目标地址，然后由设备直接发送中断给LAPIC，绕过了IOAPIC。
+If LAPIC is in KVM (kernel-irq=split), set it to KVM through kvm_set_irq, otherwise it will be converted to *MSI*. According to the definition, the device can directly construct the MSI message, which indicates the interrupt target address, and then the device directly sends the interrupt to LAPIC, bypassing IOAPIC.
 
-由于我们讨论 LAPIC 由 QEMU 模拟的情况，因此其先用pin号查询 I/O REDIRECTION TABLE (IOAPICCommonState.ioredtbl)得到 entry ，然后通过 ioapic_entry_parse 得到相关信息 (ioapic_entry_info) ，最后通过 `stl_le_phys(ioapic_as, info.addr, info.data)` 修改 IOAPIC AddressSpace 。
+Since we are discussing the situation where LAPIC is simulated by QEMU, we first query I/O REDIRECTION TABLE (IOAPICCommonState.ioredtbl) with the pin number to get the entry, and then get the relevant information (ioapic_entry_info) through ioapic_entry_parse, and finally pass `stl_le_phys(ioapic_as, info.addr) , info.data)` Modify IOAPIC AddressSpace.
 
 
-如果开启了IR， IOAPIC AddressSpace 是一个虚拟机的地址空间 `vtd_host_dma_iommu(bus, s, Q35_PSEUDO_DEVFN_IOAPIC)` 。否则为 address_space_memory 。当对该 AddressSpace 进行写入时，类似MMIO一样最终调用到 MemoryRegion 绑定的 apic_io_ops ，前文提到过，它们在 apic_realize 时被绑定到LAPIC的 apic-msi MemoryRegion。
+If IR is turned on, IOAPIC AddressSpace is the address space of a virtual machine `vtd_host_dma_iommu(bus, s, Q35_PSEUDO_DEVFN_IOAPIC)`. Otherwise, it is address_space_memory. When writing to the AddressSpace, similar to MMIO, the apic_io_ops bound to the MemoryRegion is finally called. As mentioned above, they are bound to the apic-msi MemoryRegion of LAPIC during apic_realize.
 
-于是
+then
 
 ```
 stl_le_phys => address_space_stl_le => address_space_stl_internal => memory_region_dispatch_write => access_with_adjusted_size => memory_region_oldmmio_write_accessor => mr->ops->old_mmio.write[ctz32(size)] (apic_mem_writel)
 ```
 
-apic_mem_writel 通过 cpu_get_current_apic 获取当前CPU的LAPIC(APICCommonState)，然后根据addr将data写入到其对应位置。
+apic_mem_writel obtains the LAPIC (APICCommonState) of the current CPU through cpu_get_current_apic, and then writes data to its corresponding location according to addr.
 
-因此 IOAPIC 没有out，其通过MSI将中断送达LAPIC。
-
-
+Therefore, IOAPIC has no out, and it sends the interrupt to LAPIC via MSI.
 
 
 
@@ -1425,37 +1425,39 @@ apic_mem_writel 通过 cpu_get_current_apic 获取当前CPU的LAPIC(APICCommonSt
 
 
 
-#### QEMU模拟PIC、IOAPIC芯片，KVM模拟LAPIC
-
-比起前文所述的中断送达流程，spilt模式下在 ioapic_service 中就会将中断送入KVM中。KVM根据自己的 kvm->irq_routing 进行中断路由。
 
 
-#### 中断芯片初始化
+#### QEMU simulates PIC and IOAPIC chips, and KVM simulates LAPIC
 
-QEMU在 kvm_init 中，会对KVM进行中断芯片的初始化：
+Compared with the interrupt delivery process described above, the interrupt will be sent to the KVM in the ioapic_service in spilt mode. KVM performs interrupt routing according to its own kvm->irq_routing.
+
+
+#### Interrupt chip initialization
+
+QEMU initializes the interrupt chip for KVM in kvm_init:
 
 ```
 kvm_irqchip_create => kvm_arch_irqchip_create => kvm_vm_enable_cap(s, KVM_CAP_SPLIT_IRQCHIP, 0, 24) => kvm_vm_ioctl(s, KVM_ENABLE_CAP, &cap)
                    => kvm_init_irq_routing
 ```
 
-对于split，只需要在KVM中创建LAPIC而无需 kvm_vm_ioctl(s, KVM_CREATE_IRQCHIP) 。它通过 KVM_ENABLE_CAP 尝试开启 split 能力，然后调用 kvm_init_irq_routing ，初始化IOAPIC所有pin的中断路由。
+For split, only need to create LAPIC in KVM without kvm_vm_ioctl(s, KVM_CREATE_IRQCHIP). It tries to open the split capability through KVM_ENABLE_CAP, and then calls kvm_init_irq_routing to initialize the interrupt routing of all pins of IOAPIC.
 
 
 ##### kvm_init_irq_routing
 
 ```
-=> kvm_check_extension(s, KVM_CAP_IRQ_ROUTING)     获取KVM支持的gsi总数
-=> 创建 used_gsi_bitmap ，分配 irq_routes 数组
-=> kvm_arch_init_irq_routing => kvm_irqchip_add_msi_route => kvm_add_routing_entry  将entry添加到 KVMState.entries 数组中
-                                                          => kvm_irqchip_commit_routes => kvm_vm_ioctl(KVM_SET_GSI_ROUTING) 将entries设置到KVM中
+=> kvm_check_extension(s, KVM_CAP_IRQ_ROUTING) Get the total number of gsi supported by KVM
+=> Create used_gsi_bitmap and allocate irq_routes array
+=> kvm_arch_init_irq_routing => kvm_irqchip_add_msi_route => kvm_add_routing_entry add entry to KVMState.entries array
+                                                          => kvm_irqchip_commit_routes => kvm_vm_ioctl(KVM_SET_GSI_ROUTING) Set entries to KVM
 ```
 
-kvm_irqchip_add_msi_route 会被调用24次，依次将nr(entries数组的长度)为1到24时的 KVMState.entries 作为 kvm_irq_routing 设置到QEMU中，kvm_irq_routing 定义如下：
+kvm_irqchip_add_msi_route will be called 24 times, and the KVMState.entries when nr (the length of the entries array) is 1 to 24 are set to QEMU as kvm_irq_routing, and kvm_irq_routing is defined as follows:
 
 ```c
 struct kvm_irq_routing {
-  __u32 nr;
+  __u32 no;
   __u32 flags;
   struct kvm_irq_routing_entry entries[0];
 };
@@ -1475,9 +1477,9 @@ struct kvm_irq_routing_entry {
 };
 ```
 
-此时由于设备还未初始化，因此路由表项 kvm_irq_routing_entry 中的属性都为0。
+At this time, since the device has not been initialized, the attributes in the routing table entry kvm_irq_routing_entry are all 0.
 
-之后直到在虚拟机启动之后，BIOS/OS对中断路由表进行更新时，触发VMExit，退回到QEMU中进行更新(因为IOAPIC在QEMU中模拟)：
+After that, until after the virtual machine is started, when BIOS/OS updates the interrupt routing table, it triggers VMExit and returns to QEMU for update (because IOAPIC is simulated in QEMU):
 
 ```
 address_space_rw => address_space_write => address_space_write_continue => memory_region_dispatch_write => access_with_adjusted_size => memory_region_write_accessor => ioapic_mem_write => ioapic_update_kvm_routes
@@ -1485,10 +1487,10 @@ address_space_rw => address_space_write => address_space_write_continue => memor
 => msg.address = info.addr
 => msg.data = info.data
 => kvm_irqchip_update_msi_route(kvm_state, i, msg, NULL) => kvm_update_routing_entry 用entry更新 KVMState.entries 数组
-=> kvm_irqchip_commit_routes => kvm_vm_ioctl(s, KVM_SET_GSI_ROUTING, s->irq_routes)     将新的 KVMState.entries 数组更新到KVM中
+=> kvm_irqchip_commit_routes => kvm_vm_ioctl(s, KVM_SET_GSI_ROUTING, s->irq_routes) Update the new KVMState.entries array to KVM
 ```
 
-举个例子，e1000对应的gsi 22的entry内容如下：
+For example, the entry content of gsi 22 corresponding to e1000 is as follows:
 
 ```
 (gdb) p kvm_state->irq_routes->entries[22]
@@ -1520,7 +1522,7 @@ $29 = {
     },
     hv_sint = {
       vcpu = 4276092928,
-      sint = 0
+      saint = 0
     },
     pad = {[0] = 4276092928, [1] = 0, [2] = 32865, [3] = 0, [4] = 0, [5] = 0, [6] = 0, [7] = 0}
   }
@@ -1530,40 +1532,40 @@ $29 = {
 
 #### KVM
 
-在KVM中， kvm_vm_ioctl(s, KVM_ENABLE_CAP, &cap) 的调用链如下：
+In KVM, the call chain of kvm_vm_ioctl(s, KVM_ENABLE_CAP, &cap) is as follows:
 
 ```
 kvm_vm_ioctl_enable_cap => kvm_setup_empty_irq_routing => kvm_set_irq_routing(kvm, empty_routing, 0, 0)
                         => kvm->arch.irqchip_split = true;
 ```
 
-不同于IOAPIC由KVM模拟时通过 kvm_set_irq_routing 将路由初始化成 default_routing ，在split模式下路由需要等待QEMU来进行设置，因此将其设置为空，即 empty_routing 。
+Unlike IOAPIC, which is simulated by KVM, the routing is initialized to default_routing through kvm_set_irq_routing. In split mode, routing needs to wait for QEMU to be set, so it is set to empty, that is, empty_routing.
 
-同时设置 kvm->arch.irqchip_split = true ，此后KVM中用于判断是否为split模式的函数 irqchip_split 检查的就是这个变量。
+At the same time, set kvm->arch.irqchip_split = true, and then this variable is checked by the function irqchip_split in KVM to determine whether it is in split mode.
 
 
-kvm_vm_ioctl(s, KVM_SET_GSI_ROUTING, s->irq_routes) 的调用链如下：
+The call chain of kvm_vm_ioctl(s, KVM_SET_GSI_ROUTING, s->irq_routes) is as follows:
 
 ```
 kvm_vm_ioctl => kvm_set_irq_routing => setup_routing_entry => kvm_set_routing_entry
                                     => rcu_assign_pointer(kvm->irq_routing, new)
 ```
 
-它会创建新的 kvm_irq_routing_table ，然后遍历新传入的entrys数组，对每一个entry一一调用 setup_routing_entry ，构造出 kvm_irq_routing_entry 并设置到新table中。最后将 kvm->irq_routing 指向新的table。
+It will create a new kvm_irq_routing_table, then traverse the newly passed entries array, call setup_routing_entry for each entry one by one, construct kvm_irq_routing_entry and set it to the new table. Finally, point kvm->irq_routing to the new table.
 
-由于传入entry的type为 KVM_IRQ_ROUTING_MSI(2)， 因此在 kvm_set_routing_entry 中设置 set 为 kvm_set_msi
-
-
+Since the type of the incoming entry is KVM_IRQ_ROUTING_MSI(2), set the set to kvm_set_msi in kvm_set_routing_entry
 
 
-#### 中断注入
 
-话题回到spilt模式下在 ioapic_service 中就会调用 kvm_set_irq => kvm_vm_ioctl(s, s->irq_set_ioctl, &event) 向KVM注入中断。 s->irq_set_ioctl 根据 KVM能力可能为 KVM_IRQ_LINE 或 KVM_IRQ_LINE_STATUS ，区别在于后者会返回状态。
 
-于是进到 KVM 中， kvm_vm_ioctl => kvm_vm_ioctl_irq_line
+#### Interrupt injection
+
+When the topic returns to spilt mode, kvm_set_irq => kvm_vm_ioctl(s, s->irq_set_ioctl, &event) will be called in ioapic_service to inject interrupts into KVM. s->irq_set_ioctl may be KVM_IRQ_LINE or KVM_IRQ_LINE_STATUS according to KVM capabilities, the difference is that the latter will return status.
+
+So enter KVM, kvm_vm_ioctl => kvm_vm_ioctl_irq_line
 
 ```
-=> kvm_irq_map_gsi    查询 kvm->irq_routing ，将对应gsi对应的 kvm_kernel_irq_routing_entry 一一取出
+=> kvm_irq_map_gsi query kvm->irq_routing and take out the kvm_kernel_irq_routing_entry corresponding to the gsi one by one
 => kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID, irq_event->irq, irq_event->level, line_status) => irq_set[i].set (kvm_set_msi)
 ```
 
@@ -1574,19 +1576,19 @@ kvm_set_msi => kvm_set_msi_irq
             => kvm_irq_delivery_to_apic
 ```
 
-负责将irq消息解析，构造 kvm_lapic_irq ，然后设置到对应vCPU的LAPIC中。
+Responsible for parsing the irq message, constructing kvm_lapic_irq, and then setting it to the LAPIC of the corresponding vCPU.
 
-kvm_irq_delivery_to_apic => kvm_apic_set_irq => __apic_accept_irq 实现对目标LAPIC设置中断：
+kvm_irq_delivery_to_apic => kvm_apic_set_irq => __apic_accept_irq realizes setting interrupt for target LAPIC:
 
 ```
-=> 根据 delivery_mode 进行对应设置，如 APIC_DM_FIXED 为 kvm_lapic_set_vector + kvm_lapic_set_irr
+=> Set corresponding settings according to delivery_mode, for example, APIC_DM_FIXED is kvm_lapic_set_vector + kvm_lapic_set_irr
 => kvm_make_request(KVM_REQ_EVENT, vcpu)
-=> kvm_vcpu_kick(vcpu)              让目标vCPU退出来处理请求
+=> kvm_vcpu_kick(vcpu) Let the target vCPU exit to process the request
 ```
 
-接下来在 vcpu_run => vcpu_enter_guest 中，由于 LAPIC 在KVM中，先通过 kvm_x86_ops->hwapic_irr_update (vmx_hwapic_irr_update) 更新 irr 中优先级最高的中断？
+Next, in vcpu_run => vcpu_enter_guest, since LAPIC is in KVM, first update the interrupt with the highest priority in irr through kvm_x86_ops->hwapic_irr_update (vmx_hwapic_irr_update)?
 
-之后在KVM中检测到有 KVM_REQ_EVENT 请求，调用 inject_pending_event 进行中断注入：
+After detecting a KVM_REQ_EVENT request in KVM, call inject_pending_event for interrupt injection:
 
 ```c
 static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
@@ -1600,7 +1602,7 @@ static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
 }
 ```
 
-最后由 vmx_inject_irq 将中断写入到VMCS中。
+Finally, vmx_inject_irq writes the interrupt into VMCS.
 
 
 
@@ -1623,31 +1625,31 @@ static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
 
 
 
-### 中断的完整注入流程
+### Interrupted complete injection process
 
-以 e1000 收到包后的中断为例
+Take the interrupt after e1000 receives the packet as an example
 
-需要设置中断的场景如下：
+The scenarios where interrupts need to be set are as follows:
 
 * MMIO
     address_space_rw => address_space_read => address_space_read_full => address_space_read_continue => memory_region_dispatch_read => memory_region_dispatch_read1 => access_with_adjusted_size => memory_region_read_accessor => e1000_mmio_read => mac_icr_read / ... => set_interrupt_cause => pci_set_irq
 
-* QEMU收到e1000的包
+* QEMU received e1000 package
 
     main_loop => main_loop_wait => qemu_clock_run_all_timers => qemu_clock_run_timers => timerlist_run_timers => ra_timer_handler => ndp_send_ra ip6_output => if_output => if_start => if_encap => slirp_output => qemu_send_packet => qemu_sendv_packet_async => qemu_net_queue_send_iov => qemu_net_queue_deliver_iov => qemu_deliver_packet_iov => e1000_receive_iov => set_ics => set_interrupt_cause => pci_set_irq
 
-* Mitigation timer超时 (主线程触发)
+* Mitigation timer timeout (triggered by the main thread)
 
     main_loop => main_loop_wait => qemu_clock_run_all_timers => qemu_clock_run_timers => timerlist_run_timers => e1000_mit_timer => set_interrupt_cause => pci_set_irq
 
-最终都调用到 pci_set_irq 来设置中断。
+Finally, pci_set_irq is called to set the interrupt.
 
 ```
-pci_set_irq => pci_intx   获取 PCI 配置空间的 PCI_INTERRUPT_PIN
-            => pci_irq_handler => pci_set_irq_state          设置设备的 irq_state
-                               => pci_update_irq_status      为配置空间的 PCI_STATUS 加上 PCI_STATUS_INTERRUPT bit
-                               => pci_irq_disabled           如果禁止中断，则直接返回
-                               => pci_change_irq_level       否则发射中断
+pci_set_irq => pci_intx Get PCI_INTERRUPT_PIN of PCI configuration space
+            => pci_irq_handler => pci_set_irq_state Set the irq_state of the device
+                               => pci_update_irq_status is PCI_STATUS of configuration space plus PCI_STATUS_INTERRUPT bit
+                               => pci_irq_disabled If interrupt is disabled, return directly
+                               => pci_change_irq_level otherwise the transmission is interrupted
 ```
 
 ##### pci_change_irq_level
@@ -1668,7 +1670,7 @@ static void pci_change_irq_level(PCIDevice *pci_dev, int irq_num, int change)
 }
 ```
 
-获取 PCI 设备所在的 bus ，调用 bus->map_irq 找到设备对应的 pirq(Programmable Interrupt Router) 号，对于 e1000，其 bus 为 pcie.0 ，map_irq 为 ich9_lpc_map_irq ：
+Get the bus where the PCI device is located and call bus->map_irq to find the pirq (Programmable Interrupt Router) number corresponding to the device. For e1000, its bus is pcie.0 and map_irq is ich9_lpc_map_irq:
 
 ```c
 int ich9_lpc_map_irq(PCIDevice *pci_dev, int intx)
@@ -1683,11 +1685,11 @@ int ich9_lpc_map_irq(PCIDevice *pci_dev, int intx)
 }
 ```
 
-它首先通过 qdev_get_parent_bus 拿到设备所属的bus对象(pcie.0)，然后从bus上连接的设备数组中找到 ICH9 LPC PCI to ISA bridge ，找到e1000在其irr中对应的 pirq 号，为6。
+It first obtains the bus object (pcie.0) to which the device belongs through qdev_get_parent_bus, then finds the ICH9 LPC PCI to ISA bridge from the array of devices connected to the bus, and finds the corresponding pirq number of the e1000 in its irr, which is 6.
 
-如果当前一级bus定义了 set_irq 函数，则中断for循环，调用之发送中断，否则设置为bus的父设备，进入下一轮寻找。也就是从发送中断的设备开始，逐级向上查找，直到找到能处理该中断的bus为止。
+If the current level of bus defines the set_irq function, the for loop is interrupted and the call is sent to interrupt; otherwise, it is set as the parent device of the bus and enters the next round of searching. That is, starting from the device that sent the interrupt, searching upwards step by step until it finds a bus that can handle the interrupt.
 
-在这里 set_irq 为 ich9_lpc_set_irq 。于是把中断计数数组中当前中断对应的数值加上change，表示有多少个该类型的中断等待处理。随后调用 ich9_lpc_set_irq 。
+Here set_irq is ich9_lpc_set_irq. So add change to the value corresponding to the current interrupt in the interrupt count array to indicate how many interrupts of this type are waiting to be processed. Then call ich9_lpc_set_irq.
 
 ```c
 void ich9_lpc_set_irq(void *opaque, int pirq, int level)
@@ -1704,28 +1706,28 @@ void ich9_lpc_set_irq(void *opaque, int pirq, int level)
 }
 ```
 
-利用 ich9_pirq_to_gsi 将 pirq 转换成GSI编号，其实就是 pirq + 16 ，e1000为22。然后调用 ich9_lpc_update_apic ，如果中断计数数组中当前中断对应的数值不为0，则level为1。
+Use ich9_pirq_to_gsi to convert pirq into GSI number, which is actually pirq + 16, and e1000 is 22. Then call ich9_lpc_update_apic, if the value corresponding to the current interrupt in the interrupt count array is not 0, the level is 1.
 
-于是根据GSI编号，从 ICH9LPCState.gsi 中取出对应的 qemu_irq ，调用 qemu_set_irq 将其值设置为level。
+So according to the GSI number, take out the corresponding qemu_irq from ICH9LPCState.gsi, call qemu_set_irq to set its value to level.
 
-#### 考虑e1000、IOAPIC、LAPIC都由QEMU进行模拟的情况(off)
+#### Consider the case where e1000, IOAPIC, and LAPIC are all simulated by QEMU (off)
 
-gsi qemu_irq 的 handler 为 gsi_handler ，于是：
+The handler of gsi qemu_irq is gsi_handler, so:
 
 qemu_set_irq => irq->handler (gsi_handler) => qemu_set_irq => ioapic_set_irq 设置 IOAPICCommonState 的 irr 。
 
-但这时可能 Remote IRR bit 为 1，因此在设置irr后不会调用 ioapic_service 。
+But at this time, the Remote IRR bit may be 1, so ioapic_service will not be called after setting irr.
 
-直到某个时刻 LAPIC 处理完毕后发送 EOI 让 IOAPIC 的 Remote IRR bit 变为0，才会在之后的 ioapic_set_irq 中调用 ioapic_service 。
+Until a certain time after LAPIC is processed, EOI is sent to make the Remote IRR bit of IOAPIC become 0, and then ioapic_service will be called in ioapic_set_irq.
 
-由于此时irr可能积累了多个中断，因此 ioapic_service 会遍历 IOAPIC 上的所有pin，如果 irr 在对应的bit为1，通过 stl_le_phys 修改中断在 IOAPIC AddressSpace 的对应位置。
+Since irr may accumulate multiple interrupts at this time, ioapic_service will traverse all pins on IOAPIC. If irr is 1 in the corresponding bit, modify the corresponding position of the interrupt in IOAPIC AddressSpace through stl_le_phys.
 
-当对该 AddressSpace 进行写入时，类似MMIO一样最终调用到 MemoryRegion 绑定的 apic_io_ops 。于是调用到 apic_mem_writel ，构造MSI消息后通过 apic_send_msi 发送。
+When writing to the AddressSpace, similar to MMIO, the apic_io_ops bound to the MemoryRegion is finally called. So call apic_mem_writel, construct the MSI message and send it through apic_send_msi.
 
 ```
-apic_deliver_irq => apic_bus_deliver => apic_set_irq => apic_set_bit => apic_set_bit(s->irr, vector_num)   根据中断向量号设置Interrupt Request Register
-                                                                     => apic_set_bit(s->tmr, vector_num)   如果是水平触发，设置Trigger Mode Register
-                                                     => apic_update_irq         通知CPU
+apic_deliver_irq => apic_bus_deliver => apic_set_irq => apic_set_bit => apic_set_bit(s->irr, vector_num) Set Interrupt Request Register according to the interrupt vector number
+                                                                     => apic_set_bit(s->tmr, vector_num) If it is a horizontal trigger, set the Trigger Mode Register
+                                                     => apic_update_irq notify the CPU
 ```
 
 ##### apic_update_irq
@@ -1748,39 +1750,39 @@ static void apic_update_irq(APICCommonState *s)
 }
 ```
 
-于是：
+then:
 
 ```
 cpu_interrupt(cpu, CPU_INTERRUPT_POLL) => cpu_interrupt_handler (kvm_handle_interrupt) => cpu->interrupt_request |= mask
                                                                                        => qemu_cpu_kick
 ```
 
-因此会设置目标cpu的 interrupt_request ，然后 kick 之让其退出到QEMU，回到 kvm_cpu_exec ，由于退出原因是 KVM_EXIT_INTR ，即使进入到 kvm_arch_handle_exit 也无法处理，于是 ret = -1 ，循环中断，退出到上级调用 qemu_kvm_cpu_thread_fn 中，于是在下一次循环中执行 kvm_cpu_exec => kvm_arch_process_async_events ，发现 interrupt_request 的 CPU_INTERRUPT_POLL 为1，调用 apic_poll_irq => apic_update_irq => cpu_interrupt(cpu, CPU_INTERRUPT_HARD) 。如果LAPIC有未处理的中断(apic_irq_pending)，则为 interrupt_request 加上 CPU_INTERRUPT_HARD
+Therefore, the interrupt_request of the target cpu will be set, and then kick it will exit to QEMU and return to kvm_cpu_exec. Since the exit reason is KVM_EXIT_INTR, even if it enters kvm_arch_handle_exit, it cannot be processed, so ret = -1, the loop is interrupted, and it exits to the superior call qemu_kvm_cpu_thread_fn , So execute kvm_cpu_exec => kvm_arch_process_async_events in the next loop, find that the CPU_INTERRUPT_POLL of interrupt_request is 1, call apic_poll_irq => apic_update_irq => cpu_interrupt(cpu, CPU_INTERRUPT_HARD). If LAPIC has an unhandled interrupt (apic_irq_pending), it is interrupt_request plus CPU_INTERRUPT_HARD
 
-于是在接下来的 kvm_arch_pre_run 中，如果中断可以注入，则通过 cpu_get_pic_interrupt => apic_get_interrupt 从 LAPIC 中取出中断号：
+So in the next kvm_arch_pre_run, if the interrupt can be injected, the interrupt number is taken from LAPIC through cpu_get_pic_interrupt => apic_get_interrupt:
 
 ```
-=> apic_irq_pending(s)              从irr中取出优先级级最高的中断号
-=> apic_reset_bit(s->irr, intno)    设置中断号在irr对应的bit为0
-=> apic_set_bit(s->isr, intno)      设置中断号在isr对应的bit为1
-=> apic_update_irq(s)               如果还有其它中断未处理，再次设置 cpu->interrupt_request 为 CPU_INTERRUPT_HARD
+=> apic_irq_pending(s) Take the interrupt number with the highest priority from irr
+=> apic_reset_bit(s->irr, intno) Set the interrupt number in the bit corresponding to irr to 0
+=> apic_set_bit(s->isr, intno) Set the interrupt number in the bit corresponding to isr to 1
+=> apic_update_irq(s) If there are other interrupts that have not been processed, set cpu->interrupt_request to CPU_INTERRUPT_HARD again
 ```
 
-在获得中断号后，通过 kvm_vcpu_ioctl(cpu, KVM_INTERRUPT, &intr) 注入中断到KVM。
+After obtaining the interrupt number, inject the interrupt to KVM through kvm_vcpu_ioctl(cpu, KVM_INTERRUPT, &intr).
 
-如果前面还有中断没处理，则此时 cpu->interrupt_request 依然为 CPU_INTERRUPT_HARD ，但我们一次只能注入一个中断，因此设置 request_interrupt_window 为 1，从而保证党guest能够处理下一个中断时立刻退回到QEMU。
+If there are interrupts that have not been processed before, cpu->interrupt_request is still CPU_INTERRUPT_HARD at this time, but we can only inject one interrupt at a time, so set request_interrupt_window to 1, so as to ensure that the party guest can immediately return to QEMU when the next interrupt is processed.
 
-这里注入到KVM中的 irq 是 **中断向量号(interrupt vector)** 。
+The irq injected into KVM here is the **interrupt vector number**.
 
 ##### KVM
 
-kvm_arch_vcpu_ioctl => kvm_vcpu_ioctl_interrupt => kvm_queue_interrupt(vcpu, irq->irq, false)   将中断设置到 vcpu->arch.interrupt
-                                                => kvm_make_request(KVM_REQ_EVENT, vcpu)        产生请求
+kvm_arch_vcpu_ioctl => kvm_vcpu_ioctl_interrupt => kvm_queue_interrupt(vcpu, irq->irq, false) Set interrupt to vcpu->arch.interrupt
+                                                => kvm_make_request(KVM_REQ_EVENT, vcpu) make a request
 
-这样接下来当QEMU通过 `kvm_vcpu_ioctl(cpu, KVM_RUN, 0)` 进入到KVM时，在
+Then when QEMU enters KVM through `kvm_vcpu_ioctl(cpu, KVM_RUN, 0)`,
 
 
-kvm_arch_vcpu_ioctl_run => vcpu_run => vcpu_enter_guest 中，检测到有 KVM_REQ_EVENT 请求，调用 inject_pending_event 进行中断注入：
+In kvm_arch_vcpu_ioctl_run => vcpu_run => vcpu_enter_guest, a KVM_REQ_EVENT request is detected and inject_pending_event is called for interrupt injection:
 
 ```c
 static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
@@ -1794,18 +1796,18 @@ static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
 }
 ```
 
-最后由 vmx_inject_irq 将中断写入到VMCS中。
+Finally, vmx_inject_irq writes the interrupt into VMCS.
 
 
 
 
-#### 考虑e1000、IOAPIC由QEMU进行模拟，LAPIC由KVM进行模拟的情况(split)
+#### Consider the case where e1000 and IOAPIC are simulated by QEMU, and LAPIC is simulated by KVM (split)
 
-中断从e1000发送到 IOAPIC 的流程和上文一致，直到 ioapic_service 。它会用 kvm_irqchip_is_split 判断是否为split模式，如果是，则 LAPIC 由KVM负责模拟，于是通过 kvm_set_irq 设置中断(注意对于on模式，IOAPIC也由KVM模拟，根本不会走到这里，因此这里只判断是否是split)。
+The process of sending interrupts from e1000 to IOAPIC is the same as above until ioapic_service. It will use kvm_irqchip_is_split to determine whether it is in split mode. If it is, KVM is responsible for the simulation of LAPIC, so the interrupt is set by kvm_set_irq (note that for on mode, IOAPIC is also simulated by KVM and will not go here at all, so here is only to determine whether it is split).
 
-于是 kvm_set_irq => kvm_vm_ioctl(s, s->irq_set_ioctl, &event) 向KVM注入中断。 s->irq_set_ioctl 根据 KVM能力可能为 KVM_IRQ_LINE 或 KVM_IRQ_LINE_STATUS ，区别在于后者会返回状态。
+So kvm_set_irq => kvm_vm_ioctl(s, s->irq_set_ioctl, &event) injects interrupts into KVM. s->irq_set_ioctl may be KVM_IRQ_LINE or KVM_IRQ_LINE_STATUS according to KVM capabilities, the difference is that the latter will return status.
 
-这里注入到KVM中的 irq 为中断设备对应的 **GSI**。e1000 的 gsi 是 22 。
+The irq injected into KVM here is the **GSI** corresponding to the interrupt device. The gsi of e1000 is 22.
 
 
 
@@ -1814,17 +1816,17 @@ static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
 
 kvm_vm_ioctl => kvm_vm_ioctl_irq_line => kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID, irq_event->irq, irq_event->level, line_status)
 
-从 table 中找到对应的 entry ，调用 kvm_set_ioapic_irq => kvm_ioapic_set_irq => ioapic_set_irq => ioapic_service => kvm_irq_delivery_to_apic => kvm_apic_set_irq => __apic_accept_irq 对目标LAPIC设置中断：
+Find the corresponding entry from the table, call kvm_set_ioapic_irq => kvm_ioapic_set_irq => ioapic_set_irq => ioapic_service => kvm_irq_delivery_to_apic => kvm_apic_set_irq => __apic_accept_irq Set interrupt to the target LAPIC:
 
 ```
-=> 根据 delivery_mode 进行对应设置，如 APIC_DM_FIXED 为 kvm_lapic_set_vector + kvm_lapic_set_irr
+=> Set corresponding settings according to delivery_mode, for example, APIC_DM_FIXED is kvm_lapic_set_vector + kvm_lapic_set_irr
 => kvm_make_request(KVM_REQ_EVENT, vcpu)
-=> kvm_vcpu_kick(vcpu)              让目标vCPU退出来处理请求
+=> kvm_vcpu_kick(vcpu) Let the target vCPU exit to process the request
 ```
 
-接下来在 vcpu_run => vcpu_enter_guest 中，由于 LAPIC 在KVM中，先通过 kvm_x86_ops->hwapic_irr_update (vmx_hwapic_irr_update) 更新 irr 中优先级最高的中断？
+Next, in vcpu_run => vcpu_enter_guest, since LAPIC is in KVM, first update the interrupt with the highest priority in irr through kvm_x86_ops->hwapic_irr_update (vmx_hwapic_irr_update)?
 
-后检测到有 KVM_REQ_EVENT 请求，调用 inject_pending_event 进行中断注入：
+After detecting a KVM_REQ_EVENT request, call inject_pending_event for interrupt injection:
 
 ```c
 static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
@@ -1838,25 +1840,24 @@ static int inject_pending_event(struct kvm_vcpu *vcpu, bool req_int_win)
 }
 ```
 
-最后由 vmx_inject_irq 将中断写入到VMCS中。
+Finally, vmx_inject_irq writes the interrupt into VMCS.
 
 
 
-#### 考虑e1000由QEMU进行模拟，IOAPIC、LAPIC由KVM进行模拟的情况(on)
+#### Consider the case where e1000 is simulated by QEMU, and IOAPIC and LAPIC are simulated by KVM (on)
 
-此时gsi qemu_irq 的 handler 为 kvm_pc_gsi_handler ，于是：
+At this time, the handler of gsi qemu_irq is kvm_pc_gsi_handler, so:
 
 qemu_set_irq => irq->handler (kvm_pc_gsi_handler) => qemu_set_irq(s->ioapic_irq[n], level) => irq->handler (kvm_ioapic_set_irq) => kvm_set_irq(kvm_state, s->kvm_gsi_base + irq, level) => kvm_vm_ioctl(s, s->irq_set_ioctl, &event) 通过ioctl向KVM注入中断。
 
-这里注入到KVM中的 irq 为中断设备对应的 **GSI**。由于s->kvm_gsi_base 为 0， 因此e1000算出来的gsi s->kvm_gsi_base + irq 依然为 22 。
+The irq injected into KVM here is the **GSI** corresponding to the interrupt device. Since s->kvm_gsi_base is 0, the gsi s->kvm_gsi_base + irq calculated by e1000 is still 22.
 
-因此可以发现在split和on情况下，不管IOAPIC在哪模拟，最终都是通过KVM的 KVM_IRQ_LINE / KVM_IRQ_LINE_STATUS 接口注入中断。并且中断的gsi都是22。
+Therefore, it can be found that in the case of split and on, no matter where the IOAPIC is simulated, the interrupt is finally injected through the KVM_IRQ_LINE / KVM_IRQ_LINE_STATUS interface. And the interrupted gsi is 22.
 
 
 
 ##### KVM
 
-KVM中的流程和split中的流程一样。因此和split的区别在于on需要通过接口去查询KVM模式的IOAPIC信息，而split由于QEMU负责模拟了，所以不用查询自己知道。
+The process in KVM is the same as that in split. Therefore, the difference from split is that on needs to query the IOAPIC information of the KVM mode through the interface, and split is responsible for simulation because QEMU is responsible for the simulation, so you don't need to query yourself.
 
-比如on在 hmp 查询IOAPIC时，需要通过 kvm_ioapic_dump_state => kvm_ioapic_get => kvm_vm_ioctl(kvm_state, KVM_GET_IRQCHIP, &chip) 去查。
-
+For example, when on queries IOAPIC in hmp, it needs to be checked through kvm_ioapic_dump_state => kvm_ioapic_get => kvm_vm_ioctl(kvm_state, KVM_GET_IRQCHIP, &chip).
