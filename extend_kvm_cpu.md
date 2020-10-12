@@ -1,128 +1,125 @@
-## 让KVM突破限制，支持512个vCPU
+## Let KVM break the limit and support 512 vCPUs
 
-需要修改qemu和kvm。
+Need to modify qemu and kvm.
 
 1. qemu-system-x86_64: unsupported number of maxcpus
 
-    include/sysemu/sysemu.h
+  include/sysemu/sysemu.h
 
-    ```c
-    #define MAX_CPUMASK_BITS 288
-    ```
+  ```c
+  #define MAX_CPUMASK_BITS 288
+  ```
 
-    =>
+  =>
 
-    ```c
-    #define MAX_CPUMASK_BITS 512
-    ```
+  ```c
+  #define MAX_CPUMASK_BITS 512
+  ```
 
 2. qemu-system-x86_64: Number of SMP CPUs requested (500) exceeds max CPUs supported by machine 'pc-i440fx-2.8' (255)
 
-    ```
-    m->max_cpus = 288;
-    ```
+  ```
+  m->max_cpus = 288;
+  ```
 
-    =>
+  =>
 
-    ```
-    m->max_cpus = 512;
-    ```
-
+  ```
+  m->max_cpus = 512;
+  ```
 
 3. Warning: Number of SMP cpus requested (500) exceeds the recommended cpus supported by KVM (240)
 Number of SMP cpus requested (500) exceeds the maximum cpus supported by KVM (288)
 
-    改kvm-all.c
+  Change kvm-all.c
 
-    ```c
-    #define KVM_CAP_MAX_VCPUS 66       /* returns max vcpus per vm */
-    static int kvm_max_vcpus(KVMState *s)
-    {
-        int ret = kvm_check_extension(s, KVM_CAP_MAX_VCPUS);
-        return (ret) ? ret : kvm_recommended_vcpus(s);
+  ```c
+  #define KVM_CAP_MAX_VCPUS 66       /* returns max vcpus per vm */
+  static int kvm_max_vcpus(KVMState *s)
+  {
+    int ret = kvm_check_extension(s, KVM_CAP_MAX_VCPUS);
+    return (right)? ret: kvm_recommended_vcpus (s);
+  }
+
+  int kvm_check_extension(KVMState *s, unsigned int extension)
+  {
+    int ret;
+
+    ret = kvm_ioctl(s, KVM_CHECK_EXTENSION, extension);
+    if (ret < 0) {
+      ret = 0;
     }
 
-    int kvm_check_extension(KVMState *s, unsigned int extension)
-    {
-        int ret;
+    return ret;
+  }
 
-        ret = kvm_ioctl(s, KVM_CHECK_EXTENSION, extension);
-        if (ret < 0) {
-            ret = 0;
+  static int kvm_init(MachineState *ms)
+  {
+    ...
+    soft_vcpus_limit = kvm_recommended_vcpus(s);
+    hard_vcpus_limit = kvm_max_vcpus(s);
+
+    while (nc->name) {
+      if (nc->num > soft_vcpus_limit) {
+        fprintf(stderr,
+           "Warning: Number of %s cpus requested (%d) exceeds "
+           "the recommended cpus supported by KVM (%d)\n",
+           nc->name, nc->num, soft_vcpus_limit);
+
+        if (nc->num > hard_vcpus_limit) {
+          fprintf(stderr, "Number of %s cpus requested (%d) exceeds "
+            "the maximum cpus supported by KVM (%d)\n",
+            nc->name, nc->num, hard_vcpus_limit);
+          exit(1);
         }
-
-        return ret;
+      }
+      nc++;
     }
+  }
+  ```
 
-    static int kvm_init(MachineState *ms)
-    {
-        ...
-        soft_vcpus_limit = kvm_recommended_vcpus(s);
-        hard_vcpus_limit = kvm_max_vcpus(s);
+  The number of vcpus returned by the KVM interface is limited. Essentially, kvm must be changed.
 
-        while (nc->name) {
-            if (nc->num > soft_vcpus_limit) {
-                fprintf(stderr,
-                        "Warning: Number of %s cpus requested (%d) exceeds "
-                        "the recommended cpus supported by KVM (%d)\n",
-                        nc->name, nc->num, soft_vcpus_limit);
+  arch/x86/include/asm/kvm_host.h
 
-                if (nc->num > hard_vcpus_limit) {
-                    fprintf(stderr, "Number of %s cpus requested (%d) exceeds "
-                            "the maximum cpus supported by KVM (%d)\n",
-                            nc->name, nc->num, hard_vcpus_limit);
-                    exit(1);
-                }
-            }
-            nc++;
-        }
-    }
-    ```
+  ```c
+  #define KVM_MAX_VCPUS 288
+  #define KVM_SOFT_MAX_VCPUS 240
+  ```
 
-    KVM接口返回的vcpu数量限制。本质上还是要改kvm。
+  =>
 
-    arch/x86/include/asm/kvm_host.h
-
-    ```c
-    #define KVM_MAX_VCPUS 288
-    #define KVM_SOFT_MAX_VCPUS 240
-    ```
-
-    =>
-
-    ```c
-    #define KVM_MAX_VCPUS 512
-    #define KVM_SOFT_MAX_VCPUS 512
-    ```
-
+  ```c
+  #define KVM_MAX_VCPUS 512
+  #define KVM_SOFT_MAX_VCPUS 512
+  ```
 
 4. qemu-system-x86_64: current -smp configuration requires Extended Interrupt Mode enabled. You can add an IOMMU using: -device intel-iommu,intremap=on,eim=on
 
-    启动时加上参数 -device intel-iommu,intremap=on,eim=on
+  Add the parameter -device intel-iommu, intremap=on, eim=on when starting
 
 5. qemu-system-x86_64: -device intel-iommu,intremap=on,eim=on: Intel Interrupt Remapping cannot work with kernel-irqchip=on, please use 'split|off'.
 
-    ```bash
-    $ sudo $QEMU_SYSTEM_64 -m 512 -hda $DISK -boot c -vnc :1 -enable-kvm -smp 500 -machine q35,kernel-irqchip=split -device intel-iommu,intremap=on,eim=on
-    ```
-    + 将`$QEMU_SYSTEM_64`替换成重新编译过后qemu-system-x86_64的路径, 例如 `/home/binss/Desktop/qemu/bin/debug/native/x86_64-softmmu/qemu-system-x86_64`
-    + 将`$DISK`替换成目标img文件
+  ```bash
+  $ sudo $QEMU_SYSTEM_64 -m 512 -hda $DISK -boot c -vnc :1 -enable-kvm -smp 500 -machine q35,kernel-irqchip=split -device intel-iommu,intremap=on,eim=on
+  ```
+
+  + Replace `$QEMU_SYSTEM_64` with the path of qemu-system-x86_64 after recompilation, for example `/home/binss/Desktop/qemu/bin/debug/native/x86_64-softmmu/qemu-system-x86_64`
+    + Replace `$DISK` with the target img file
     + 可参考：<https://lists.gnu.org/archive/html/qemu-devel/2016-07/msg02930.html>
 
+6. Break the CPU limit of guest OS
 
-6. 突破guest OS的CPU限制
+  Modify nr_cpu, currently
 
-    修改nr_cpu，当前为
+  ```bash
+  $ grep NR_CPUS /boot/config-`uname -r`
+  $ CONFIG_NR_CPUS=256
+  ```
 
-    ```bash
-    $ grep NR_CPUS /boot/config-`uname -r`
-    $ CONFIG_NR_CPUS=256
-    ```
-
-    这里可以手动修改config然后重新编译kernel, 详见:
+  Here you can manually modify the config and recompile the kernel, see:
     - [KernelBuild](https://kernelnewbies.org/KernelBuild)
     - [Kernels/Traditional compilation](https://wiki.archlinux.org/index.php/Kernels/Traditional_compilation)
 
-    或者换用更新的kernel，比如4.4.0-62。
-
+  Or use a newer kernel, such as 4.4.0-62.
 
