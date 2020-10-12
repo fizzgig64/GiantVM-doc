@@ -1,132 +1,132 @@
 # PIC
-PIC也就是8259A中断控制器，可以配合MCS-80/85（即8080/8085）或8086使用，前者与后者操作模式不同，以下只考虑8086模式，即现代PC所兼容的操作模式。手册[见此](http://heim.ifi.uio.no/~inf3151/doc/8259A.pdf)。
+PIC is also 8259A interrupt controller, which can be used with MCS-80/85 (8080/8085) or 8086. The former is different from the latter in operation mode. Below, only 8086 mode, which is compatible with modern PCs, is considered. Manual [see here](http://heim.ifi.uio.no/~inf3151/doc/8259A.pdf).
 
-每个8259A芯片具备8个中断引脚，分别记为IRQ0-IRQ7。8259A支持级联，最多可以支持一个Master和八个Slave，但约定俗成的使用方式是一个Master加一个Slave。此时Master的中断记为IRQ0-IRQ7，Slave的中断记为IRQ8-IRQ15，Slave的INT输出信号连到Master的IRQ2，故总共支持15个中断信号。
-> **Info:** 最初只有一个PIC芯片时，IRQ2已被占用，当IBM切换到双PIC芯片方案时，当初的IRQ2就被重新连接到了IRQ9上
+Each 8259A chip has 8 interrupt pins, which are marked as IRQ0-IRQ7. The 8259A supports cascading and can support up to one Master and eight Slaves, but the conventional way of using it is one Master plus one Slave. At this time, the interrupt of Master is marked as IRQ0-IRQ7, the interrupt of Slave is marked as IRQ8-IRQ15, and the INT output signal of Slave is connected to IRQ2 of Master, so a total of 15 interrupt signals are supported.
+> **Info:** When there was only one PIC chip, IRQ2 was already occupied. When IBM switched to the dual PIC chip solution, the original IRQ2 was reconnected to IRQ9
 
-8259A的两个基本寄存器是IRR和ISR，都是8位寄存器，用于记录当前正在处理的中断的状态。
+The two basic registers of 8259A are IRR and ISR, both are 8-bit registers, used to record the status of the interrupt currently being processed.
 
-## 基本流程
-1. IRQ0-IRQ7的其中一个引脚收到一个中断信号，则设置IRR中对应的bit
-2. 8259A通过INT信号线向CPU发送中断信号
-3. CPU收到INT信号后，发出一个INTA信号，输入8259A的INTA输入引脚
-4. 将IRR中的bit清除，在ISR中设置对应的bit
-5. CPU在下一个周期再发出一个INTA信号，输入8259A的INTA输入引脚，此时8259A通过数据总线向CPU发送Interrupt Vector
-6. 最后，若处于AEOI模式，ISR中的bit直接清除，否则要等CPU处理完该中断后，向8259A进行一次EOI，才能将ISR中的bit清除
+## Basic process
+1. When one of the IRQ0-IRQ7 pins receives an interrupt signal, set the corresponding bit in IRR
+2. The 8259A sends an interrupt signal to the CPU through the INT signal line
+3. After the CPU receives the INT signal, it sends out an INTA signal and inputs it to the INTA input pin of 8259A
+4. Clear the bit in the IRR and set the corresponding bit in the ISR
+5. The CPU sends out an INTA signal in the next cycle and inputs the INTA input pin of the 8259A. At this time, the 8259A sends an Interrupt Vector to the CPU through the data bus.
+6. Finally, if it is in AEOI mode, the bit in the ISR is cleared directly, otherwise, after the CPU has processed the interrupt, an EOI is performed to 8259A to clear the bit in the ISR
 
-> **Note:** 若在第四步时中断信号已经消失，无从判断其IRQ号，则会产生一个Spurious Interrupt，其Interrupt Vector和IRQ7一致。因此接受IRQ7（或IRQ15等）时，需先检查PIC的ISR，看其是否是Spurious Interrupt，然后才能进行中断处理。
+> **Note:** If the interrupt signal has disappeared in the fourth step and its IRQ number cannot be judged, a Spurious Interrupt will be generated, and its Interrupt Vector and IRQ7 will be the same. Therefore, when accepting IRQ7 (or IRQ15, etc.), you need to check the ISR of the PIC to see if it is Spurious Interrupt, and then interrupt processing.
 >
-> PS. 显然，这没有LAPIC为Spurious Interrupt单独赋予一个向量号先进。
+> PS. Obviously, this is not as advanced as LAPIC assigns a vector number to Spurious Interrupt alone.
 
-### 级联模式
-在级联模式下，若Slave收到一个中断，它会通过INT输出引脚输出一个中断信号，引起Master在某个IRQ引脚上收到中断。Master由于事先已经被配置好，知道该引脚对应的是Slave（而且知道是哪个），故在给CPU发送INT信号后，会通过一个3位的CAS选择器，选择8个Slave之一。被选中的Slave便在第二个INTA周期向数据总线输出Interrupt Vector，完成中断的发送。
+### Cascade Mode
+In cascade mode, if the Slave receives an interrupt, it will output an interrupt signal through the INT output pin, causing the Master to receive an interrupt on an IRQ pin. Since the Master has been configured in advance and knows that the pin corresponds to the Slave (and knows which one), after sending the INT signal to the CPU, it will select one of the 8 Slaves through a 3-bit CAS selector. The selected Slave outputs Interrupt Vector to the data bus in the second INTA cycle to complete the interrupt transmission.
 
-需要注意的是，级联模式下，CPU执行完中断处理例程后，需要进行两次EOI，分别对Master和Slave各进行一次。
+It should be noted that in cascade mode, after the CPU finishes executing the interrupt processing routine, it needs to perform two EOIs, one for the Master and one for the Slave.
 
-## 编程接口
-PIC通过Port IO操纵，Master占据0x20和0x21两个端口，Slave占据0xA0和0xA1两个端口。下面我们将前一个端口称为Command端口，后一个端口称为Data端口（这是OSDev上的叫法）。[手册](http://heim.ifi.uio.no/~inf3151/doc/8259A.pdf)中的A_0位表示的就是Port号的最后一位，取0即Command，取1即Data。
+## Programming interface
+PIC is manipulated through Port IO, Master occupies two ports 0x20 and 0x21, Slave occupies two ports 0xA0 and 0xA1. Below we refer to the former port as the Command port, and the latter port as the Data port (this is the name on OSDev). The A_0 bit in [Manual](http://heim.ifi.uio.no/~inf3151/doc/8259A.pdf) represents the last digit of the Port number, 0 is Command, and 1 is Data.
 
 ### Initialization
-在初始化时有四个Word（8位）可以使用，分别为ICW1-ICW4（Initialization Command Word）。写入ICW1就会启动初始化过程，重新初始化PIC。
+There are four Words (8 bits) that can be used during initialization, namely ICW1-ICW4 (Initialization Command Word). Writing to ICW1 will start the initialization process and reinitialize the PIC.
 
-当A_0位为0（即写入Command端口）且输入值的第四位取1时，就认为是ICW1，由此会开启初始化过程。随后需要输入ICW2-ICW4，它们都要求A_0位1，即从Data端口输入。
+When the A_0 bit is 0 (that is, written to the Command port) and the fourth bit of the input value is 1, it is considered to be ICW1, which will start the initialization process. Then you need to input ICW2-ICW4, they all require A_0 bit 1, that is, input from the Data port.
 
-ICW1的内容如下：
-- 第0位为IC4，表示是否需要ICW4，取1表示需要
-- 第1位为SNGL，取1表示Single，取0表示Cascade，若为Single模式则不需要ICW3
-- :warning: 第2位为ADI,8080/8085模式才有用，在8086模式下会被忽略
-- 第3位为LTIM，取1表示Level Triggered Mode，此时Edge Triggered Interrupt会被忽略
-- 第4位必须为1
-- :warning: 第5-7位，8080/8085模式才有用，在8086模式下会被忽略
+The content of ICW1 is as follows:
+-The 0th bit is IC4, which indicates whether ICW4 is required, and 1 is required
+-The first digit is SNGL, 1 means Single, 0 means Cascade, if it is Single mode, ICW3 is not required
+-:warning: The second digit is ADI, only useful in 8080/8085 mode, it will be ignored in 8086 mode
+-The third digit is LTIM, and 1 means Level Triggered Mode, at this time Edge Triggered Interrupt will be ignored
+-The 4th place must be 1
+-:warning: Bits 5-7, 8080/8085 mode is only useful, it will be ignored in 8086 mode
 
-ICW1之后必须紧跟ICW2，内容如下：
-- :warning: 第0-2位，8080/8085模式才有用，在8086模式下会被忽略
-- 第3-7位，表示Interrupt Vector的第3-7位。也就是说一块PIC的IRQ0-IRQ7，会被映射到Offset+0到Offset+7，其中Offset就是ICW2的值（末三位总是被视为零，设置时填零即可）
+ICW1 must be followed by ICW2, and the content is as follows:
+-:warning: Bits 0-2, 8080/8085 mode is only useful, it will be ignored in 8086 mode
+-Bits 3-7 indicate bits 3-7 of the Interrupt Vector. In other words, IRQ0-IRQ7 of a PIC will be mapped to Offset+0 to Offset+7, where Offset is the value of ICW2 (the last three digits are always regarded as zeros, just fill in zeros when setting)
 
-> **Info:** 在实模式下，约定俗成的设置为Master的IRQ映射到0x08-0x0F，Slave的IRQ映射到0x70-0x77，BIOS通常会如此设置。但进入保护模式后，0x08-0x0F与CPU默认的Exception范围冲突，故应该将IRQ重映射，一般是映射到0x20-0x2F。
+> **Info:** In real mode, the conventional setting is that the IRQ of Master is mapped to 0x08-0x0F, and the IRQ of Slave is mapped to 0x70-0x77, which is usually set in the BIOS. But after entering the protected mode, 0x08-0x0F conflicts with the default Exception range of the CPU, so the IRQ should be remapped, generally to 0x20-0x2F.
 
-如果处于级联模式，则还需设置ICW3，内容如下：
-- Slave模式时，第0-2位表示Slave ID（对应于CAS选择器的值），其余位保留，应均为0
-- Master模式时，ICW3是一个8位的bitmap，每一位对应于一个Slave
+If you are in cascade mode, you need to set ICW3 as follows:
+-In Slave mode, bits 0-2 indicate the Slave ID (corresponding to the value of the CAS selector), and the remaining bits are reserved and should be 0
+-In Master mode, ICW3 is an 8-bit bitmap, and each bit corresponds to a Slave
 
-> **Info:** 在非Buffered模式下，PIC是处于Master还是Slave状态，是由SP/EN输入引脚的电平决定的，若为1则是Master，若为0则是Slave。在Buffered模式下，则是由ICW4的M/S位确定的，取1表示Master，取0表示Slave。
+> **Info:** In non-Buffered mode, whether the PIC is in Master or Slave state is determined by the level of the SP/EN input pin. If it is 1, it is Master, and if it is 0, it is Slave. In the Buffered mode, it is determined by the M/S bit of ICW4, with 1 for Master and 0 for Slave.
 
-如果IC4取1，则还需要设置ICW4，否则ICW4当做全为0处理，内容如下：
-- 第0位为μPM，取0表示8080/8085操作模式，取1表示8086操作模式
-    > 由此可见现代机器上若要使用PIC，必须设置ICW4
-- 第1位为AEOI，取1表示开启Automatic EOI模式
-- 第2位为M/S，在Buffered模式下用于确定Master和Slave
-- 第3位为BUF，取1表示开启Buffered模式
-    - Buffered模式下，SP/EN引脚作为输出引脚，控制Buffer的开启。所谓的Buffer，就是在PIC和Data Bus之间设置的一个Buffer。
-- 第4位为SFNM，取1表示开启Special Fully Nested模式
-    - 该模式用于级联配置，应由Master开启Special Fully Nested模式，此时Slave的中断不会被In-Service的它自己屏蔽。在该模式下，BIOS或OS需在Slave的中断处理完时检查Slave中是否有超过一个中断等待EOI，若是则只需对Slave进行EOI而无需对Master进行EOI，否则应对Master也进行EOI
-- 第5-7位保留，应全为0
+If IC4 is 1, you also need to set ICW4, otherwise ICW4 is treated as all 0s, and the content is as follows:
+-The 0th bit is μPM, 0 means 8080/8085 operation mode, 1 means 8086 operation mode
+    > It can be seen that if you want to use PIC on modern machines, you must set ICW4
+-The first digit is AEOI, take 1 to turn on Automatic EOI mode
+-The second digit is M/S, which is used to determine Master and Slave in Buffered mode
+-The third bit is BUF, and 1 means to turn on Buffered mode
+    -In Buffered mode, the SP/EN pin is used as an output pin to control the opening of the buffer. The so-called Buffer is a Buffer set between PIC and Data Bus.
+-The fourth digit is SFNM, and 1 means to turn on Special Fully Nested mode
+    -This mode is used for cascading configuration. The Special Fully Nested mode should be turned on by the Master. At this time, the interrupt of the Slave will not be shielded by the In-Service itself. In this mode, the BIOS or OS needs to check whether there is more than one interrupt waiting for EOI in the Slave when the interrupt processing of the Slave is completed. If so, only need to perform EOI on the Slave and not need to perform EOI on the Master, otherwise, the Master should also perform EOI
+-Bits 5-7 are reserved and should be all 0s
 
 ### Operation
-初始化完成后，还能通过三个8位的OCW（Operation Command Word）进行运行时的调整。
+After the initialization is completed, three 8-bit OCW (Operation Command Word) can be used for runtime adjustment.
 
-当A_0位为1时（即Data端口），输入值即为OCW1，代表了Interrupt Mask，其每一位对应于一个IRQ，取1即屏蔽该IRQ。同时，读取该端口即可读到IMR（Interrupt Mask Register）的值。
+When the A_0 bit is 1 (that is, the Data port), the input value is OCW1, which represents the Interrupt Mask, and each bit corresponds to an IRQ. Taking 1 to mask the IRQ. At the same time, reading the port can read the value of IMR (Interrupt Mask Register).
 
-当A_0位为0时（即Command端口），根据输入值的第3、第4位决定其含义。若第4位为1，则表示ICW1，若第4位为0，则第3位取0代表OCW2，第3位取1代表OCW3。
+When the A_0 bit is 0 (ie Command port), its meaning is determined according to the third and fourth bits of the input value. If the 4th bit is 1, it means ICW1, if the 4th bit is 0, then the 3rd bit is 0 for OCW2, and the 3rd bit is 1 for OCW3.
 
 #### OCW2
-在介绍OCW2前，先介绍以下概念：
+Before introducing OCW2, first introduce the following concepts:
 ##### End of Interrupt
-- EOI Command：有两种EOI Command，即Specific和Non-Specific，Non-Specific EOI会自动清空ISR中最高优先级位【**手册中为最高位，疑为笔误，似应为最高优先级位**】，Specific EOI则清空ISR中被指定的那个Bit
-- AEOI Mode：若ICW4中的AEOI位取1，则进入Automatic EOI模式，在中断收到后（INTA周期结束后）立即自动进行一次Non-Specific EOI
+-EOI Command: There are two types of EOI Commands, namely Specific and Non-Specific. Non-Specific EOI will automatically clear the highest priority bit in the ISR [**The highest bit in the manual, suspected to be a clerical error, it should be the highest priority bit **], Specific EOI clears the specified Bit in the ISR
+-AEOI Mode: If the AEOI bit in ICW4 is set to 1, it will enter the Automatic EOI mode, and automatically perform a Non-Specific EOI immediately after the interrupt is received (after the INTA cycle ends)
 
 ##### Interrupt Priority
-- Fully Nested Mode：PIC初始化后的默认状态，此时中断的优先级依照IRQ0-IRQ7的顺序依次降低，高优先级的中断可以打断低优先级的
-    > **Info:** 一旦ISR中有高优先级的中断，低优先级的中断就不会进入IRR，而在LAPIC中则还能在IRR中存入一次低优先级的中断
-- Rotation Mode：优先级轮转，一次轮转即令某个IRQ优先级变为最低，其余IRQ随之轮转（e.g. 令IRQ4为最低优先级7，则IRQ3优先级变为6，以此类推，最后IRQ5变为最高优先级0）
-    - Automatic Rotation：依附在EOI上的选项，令EOI带有使被其清除的Bit对应的IRQ优先级变为最低，并让其余IRQ依次轮转的能力
-    - Specific Rotation：手动进行优先级轮转，指定某个IRQ优先级变为最低，并让其余IRQ依次轮转（该操作与EOI无关，但可以依附在Specific EOI上）
+-Fully Nested Mode: The default state after the PIC is initialized. At this time, the priority of the interrupt is reduced in the order of IRQ0-IRQ7. High priority interrupts can interrupt low priority interrupts.
+    > **Info:** Once there is a high-priority interrupt in the ISR, the low-priority interrupt will not enter the IRR, and in LAPIC, a low-priority interrupt can be stored in the IRR
+-Rotation Mode: Priority rotation, one rotation will make a certain IRQ priority become the lowest, and the rest of the IRQ will rotate with it (eg if IRQ4 is the lowest priority 7, then IRQ3 priority will become 6, and so on, finally IRQ5 will change Is the highest priority 0)
+    -Automatic Rotation: Attached to the option on the EOI, the EOI has the ability to make the IRQ priority of the cleared Bit the lowest, and let the rest of the IRQs rotate in turn
+    -Specific Rotation: Manually perform priority rotation, specify an IRQ priority to become the lowest, and let the rest of the IRQ rotate in turn (this operation has nothing to do with EOI, but can be attached to Specific EOI)
 
 ##### Operations of OCW2
-OCW2的内容如下：
-- 第0-2位，配合SL位使用，用于指定某个IRQ
-- 第3-4位必须为0
-- 第5位为EOI，取1表示这是一个EOI Command，可以清空ISR中的一个Bit
-- 第6位为SL，即Specific Level，取1表示指定一个IRQ进行操作（Specific EOI或Specific Rotation）
-- 第7位为R，即Rotation，用于决定是否进行优先级轮转
+The content of OCW2 is as follows:
+-Bits 0-2, used in conjunction with the SL bit to specify a certain IRQ
+-Bits 3-4 must be 0
+-The 5th bit is EOI, taking 1 means this is an EOI Command, which can clear a bit in the ISR
+-The sixth digit is SL, which is Specific Level, taking 1 means specifying an IRQ for operation (Specific EOI or Specific Rotation)
+-The seventh bit is R, which is Rotation, which is used to decide whether to perform priority rotation
 
-OCW2的第5-7位组合如下：
-- EOI=1, SL=0, R=0：Non-Specific EOI Command，清空ISR最高优先级位，优先级不变
-- EOI=1, SL=1, R=0：Specific EOI Command，OCW2的第0-2位用于指定清除ISR的哪个Bit
-- EOI=1, SL=0, R=1：Non-Specific EOI with Automatic Rotation，清空ISR最高优先级位，优先级轮转
-- EOI=0, SL=0, R=1：开启AEOI模式下的Automatic Rotation，使得AEOI下自动进行的Non-specific EOI带有Automatic Rotation功能
-- EOI=0, SL=0, R=0：关闭AEOI模式下的Automatic Rotation
-- EOI=0, SL=1, R=1：Specific Rotation，OCW2的第0-2位用于指定哪个IRQ为最低优先级
-- EOI=1, SL=1, R=1：Specific EOI with Specific Rotation，OCW2的第0-2位用于指定清除ISR的哪个Bit以及指定哪个IRQ为最低优先级
-- EOI=1, SL=1, R=0：无效操作，不会发生任何事
+The combination of positions 5-7 of OCW2 is as follows:
+-EOI=1, SL=0, R=0: Non-Specific EOI Command, clear the highest priority bit of ISR, the priority remains unchanged
+-EOI=1, SL=1, R=0: Specific EOI Command, bits 0-2 of OCW2 are used to specify which bit of ISR to clear
+-EOI=1, SL=0, R=1: Non-Specific EOI with Automatic Rotation, clear the highest priority bit of ISR, priority rotation
+-EOI=0, SL=0, R=1: Turn on Automatic Rotation in AEOI mode, so that Non-specific EOI automatically performed under AEOI has Automatic Rotation function
+-EOI=0, SL=0, R=0: Turn off Automatic Rotation in AEOI mode
+-EOI=0, SL=1, R=1: Specific Rotation, bits 0-2 of OCW2 are used to specify which IRQ is the lowest priority
+-EOI=1, SL=1, R=1: Specific EOI with Specific Rotation, bits 0-2 of OCW2 are used to specify which Bit of ISR to clear and which IRQ is the lowest priority
+-EOI=1, SL=1, R=0: invalid operation, nothing will happen
 
 #### OCW3
-OCW3的内容如下：
-- 第0位为RIS，即Read ISR，取1表示从Command端口读出IRR，取0表示从Command端口读出ISR
-- 第1位为RR，Read Register，取1时启用RIS位，取0时RIS位会被忽略
-- 第2位为P，取1表示这是一个Poll Command，取0则没有任何效果
-- 第3位必须为1，第4位必须为0
-- 第5位为SMM，Special Mask Mode，取1代表开启Special Mask模式，取0代表关闭
-- 第6位为ESMM，Enable Special Mask Mode，取1时启用SMM位，取0时SMM位会被忽略
-- 第7位保留，应为0
+The contents of OCW3 are as follows:
+-The 0th bit is RIS, that is, Read ISR, 1 means read IRR from Command port, and 0 means read ISR from Command port
+-The first bit is RR, Read Register, when set to 1, the RIS bit is enabled, when set to 0, the RIS bit will be ignored
+-The second digit is P, 1 means this is a Poll Command, 0 means no effect
+-The third digit must be 1, and the fourth digit must be 0
+-The fifth digit is SMM, Special Mask Mode, take 1 to turn on Special Mask mode, take 0 to turn off
+-The sixth bit is ESMM, Enable Special Mask Mode. When set to 1, the SMM bit is enabled, and when set to 0, the SMM bit will be ignored
+-The 7th bit is reserved and should be 0
 
-实际上OCW3共集成了三个功能（可以同时使用），第一个功能是从Command端口（A_0位为0）可以读出IRR或ISR的值，通过RR和RIS位可以选择读取哪个，PIC初始化后默认是读出IRR的值。
+In fact, OCW3 integrates three functions (can be used at the same time). The first function is to read the value of IRR or ISR from the Command port (bit A_0 is 0). You can choose which one to read through the RR and RIS bits. PIC After initialization, the default is to read the value of IRR.
 
-第二个功能是Poll模式，在通过OCW3发出一个Poll Command后，下一次读取Command端口（A_0位为0）时，就相当于一次中断Accept。若此时恰有中断Pending，则ISR中的Bit会被设置，读到的值最高位为1，最低3位为IRQ号。否则，则读到的值最高位为0，表示没有中断发生。
+The second function is Poll mode. After sending a Poll Command through OCW3, the next time the Command port is read (A_0 bit is 0), it is equivalent to an interrupt Accept. If there is an interrupt Pending at this time, the Bit in the ISR will be set, the highest bit of the value read is 1, and the lowest 3 bits are the IRQ number. Otherwise, the highest bit of the value read is 0, indicating that no interrupt has occurred.
 
-第三个功能是Special Mask模式，在此模式下若某个位被IMR屏蔽，则有以下效果：
-- 即使该位是ISR中有最高优先级，也不会被Non-Specific EOI清空
-- 其余未被屏蔽的位，即使优先级低于该位，其对应的IRQ仍然可以被接受
+The third function is Special Mask mode. In this mode, if a bit is shielded by IMR, it will have the following effects:
+-Even if this bit has the highest priority in ISR, it will not be cleared by Non-Specific EOI
+-For the remaining unmasked bits, even if the priority is lower than this bit, the corresponding IRQ can still be accepted
 
 ## PIC in ICH9
-随着芯片集成度的提升，8259芯片被集成到了南桥内，我们可以从历代南桥手册中查询到其IRQ pin接到的是什么设备，已经经历了什么小改动。此处介绍QEMU模拟的Q35芯片组中的ICH9南桥中对8259的改动和配置。
+With the improvement of chip integration, the 8259 chip is integrated into the South Bridge. We can find out what equipment its IRQ pin is connected to and what minor changes have been made in the manuals of the South Bridge. Here are the changes and configurations of the 8259 in the ICH9 South Bridge in the Q35 chipset simulated by QEMU.
 
-### 改动
-在ISA总线时代，ICW1的第3位决定了是否是Level Triggered，取1表示整个PIC的中断都是Level Triggered的。进入PCI总线时代后（从PIIX芯片组开始），添加了两个8位的ELCR（Edge/Level Control Register）寄存器（ELCR0、ELCR1），分别位于0x4D0和0x4D1端口，每个位控制一个IRQ是否是Level Triggered的。
+### Changes
+In the ISA bus era, the third bit of ICW1 determines whether it is Level Triggered. Taking 1 means that the entire PIC interrupt is Level Triggered. After entering the PCI bus era (starting from the PIIX chipset), two 8-bit ELCR (Edge/Level Control Register) registers (ELCR0, ELCR1) are added, located at ports 0x4D0 and 0x4D1, each bit controls whether an IRQ is Level Triggered.
 
-### 配置
-Slave的ID设置为010b，Master和Slave的IRQ Pin设置如下：
+### Configuration
+The ID of the Slave is set to 010b, and the IRQ Pins of the Master and Slave are set as follows:
 
 ![ich9_8259](/assets/ich9_8259.png)
 
-其中IRQ0、IRQ1、IRQ2、IRQ8、IRQ13必须为Edge Triggered，即ELCR中对应位必须为0
+Among them, IRQ0, IRQ1, IRQ2, IRQ8, IRQ13 must be Edge Triggered, that is, the corresponding bit in ELCR must be 0
